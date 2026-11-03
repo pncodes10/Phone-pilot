@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Phone Pilot</string>
+    <string name="service_name">Phone Pilot (Claude control)</string>
+    <string name="service_description">Lets Claude read the screen and tap, type and swipe on your behalf, to test apps. Turn this off when you are not using it.</string>
+</resources>
