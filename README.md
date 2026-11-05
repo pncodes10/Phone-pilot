@@ -247,5 +247,12 @@ It stops at the first failure (`--keep-going` carries on), saves a screenshot an
 
 **Command-line shortcuts.** Tool arguments can be `key=value` pairs instead of JSON, with a bare value going to the main parameter: `phonectl.py PAIR tap_id 5`, `phonectl.py PAIR wait_for text=Saved timeout=5`, `phonectl.py PAIR get_screen full=true`, `phonectl.py PAIR launch_app Settings`. With `PHONE_PAIRING` set, the pairing can be left out: `phonectl.py get_screen`.
 
-**Measuring the change.** Run the Storage Planner flow by hand with Claude on 0.6 and on 0.7 and compare steps, failures and time. Then run `examples/storage-planner.yaml` a few times: the per-step times and the PASS/FAIL count give a repeatable baseline.
+**Measured on a Samsung S23 FE** (Wi-Fi bridge over a Cloudflare tunnel, 0.7.2). Flow: open Storage Planner, open Algorithm Lab, press Back, checking each screen. Average of two runs:
+
+| | Time | Phone calls | Screen text | Failed checks |
+|---|---|---|---|---|
+| 0.6 style: fixed waits, full `get_screen` after every action | 14.5 s | 10 | 10,300 chars | 0 |
+| 0.7: numbered items, screen returned with each action, `wait_for` | 6.3 s | 5 | 3,600 chars | 0 |
+
+`examples/storage-planner.yaml` passes all 13 steps in about 19 s.
 
