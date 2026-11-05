@@ -192,6 +192,8 @@ A clickable row is named after the text inside it, and that text isn't listed ag
 
 **Numbered items.** Each screen read numbers the items and remembers them. `tap_id 5` taps item 5, and `type_text text="Box A" id=6` types into item 6. Before acting, the phone checks the item is still there with the same id, text and position. If the screen changed, nothing is tapped and you get an error plus the new screen. `tap_element` still works as another name for `tap_id`. Numbers now start at 1.
 
+**Full text.** The screen list cuts long text at 80 characters. `get_text 4` (or `get_text text="Compress"`) returns item 4's whole text, e.g. a log.
+
 **Tap by text.** `tap_text "Add item"` (or `res_id=save_btn`) taps the best visible match: exact text first, then clickable items.
 
 **The new screen after every action.** `tap_id`, `tap_text`, `tap`, `type_text`, `swipe`, `scroll`, `press_button`, `launch_app`, `open_url`, `wait_for` and `wait_gone` wait for the screen to settle, then return

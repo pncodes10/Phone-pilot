@@ -174,7 +174,7 @@ def save_image(res: dict, path: str) -> str | None:
 
 # The parameter a bare value fills, e.g. "tap_id 5" -> {"id": 5}. True means keep it as text.
 MAIN_PARAM = {
-    "tap_id": ("id", False), "tap_element": ("index", False), "tap_text": ("text", True),
+    "tap_id": ("id", False), "get_text": ("id", False), "tap_element": ("index", False), "tap_text": ("text", True),
     "type_text": ("text", True), "launch_app": ("app", True), "open_url": ("url", True),
     "scroll": ("direction", True), "press_button": ("button", True), "wait": ("seconds", False),
     "wait_for": ("text", True), "wait_gone": ("text", True), "list_apps": ("filter", True),

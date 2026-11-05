@@ -91,6 +91,11 @@ public final class DeviceTools {
                                   "res_id", "string", "Resource id that should disappear",
                                   "exact", "boolean", "Whole text must match",
                                   "timeout", "number", "Seconds, default 5, max 60"))));
+            t.put(tool("get_text",
+                    "Full, uncut text of one item (the screen list shortens long text), e.g. a log. Pass id "
+                    + "(item number), or text / res_id to find it.",
+                    props("id", "integer", "Item number", "text", "string", "Part of its text",
+                          "res_id", "string", "Resource id")));
             t.put(tool("wait", "Fixed pause (max 10 seconds). Prefer wait_for or wait_gone.",
                     props("seconds", "number", "Seconds to wait"), "seconds"));
             return t;
@@ -237,6 +242,8 @@ public final class DeviceTools {
                     if (o.ok) svc.waitForIdle(400, 500, 4000);
                     return act(in, o, false);
                 }
+                case "get_text":
+                    return getText(in);
                 case "wait_for":
                     return waitFor(in, false);
                 case "wait_gone":
@@ -353,6 +360,27 @@ public final class DeviceTools {
 
     private static PilotService.Outcome outcome(String msg, String okPrefix) {
         return msg.startsWith(okPrefix) ? PilotService.Outcome.ok(msg) : PilotService.Outcome.fail(msg);
+    }
+
+    private Result getText(JSONObject in) throws JSONException {
+        android.view.accessibility.AccessibilityNodeInfo n;
+        if (in.has("id")) {
+            StringBuilder why = new StringBuilder();
+            PilotService.Elem e = svc.resolve(in.getInt("id"), why);
+            if (e == null) return err(why.toString());
+            if (e.node == null) return err("[" + in.getInt("id") + "] is a grid cell; it has no text.");
+            n = e.node;
+        } else {
+            List<android.view.accessibility.AccessibilityNodeInfo> f =
+                    svc.findNodes(in.optString("text", ""), in.optString("res_id", ""), false);
+            if (f.isEmpty()) return err("Nothing matching that is on screen.");
+            n = f.get(0);
+        }
+        CharSequence t = n.getText();
+        if (t == null || t.length() == 0) t = n.getContentDescription();
+        String text = t == null ? "" : t.toString();
+        if (text.length() > 200000) text = text.substring(0, 200000) + "\n[cut at 200000 characters]";
+        return ok(text.length() + " characters:\n" + text);
     }
 
     /** wait_for / wait_gone: poll every 300 ms until the text is there (or gone) or the time runs out. */
