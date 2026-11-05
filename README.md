@@ -143,7 +143,7 @@ It works in three ways:
    ```
    Claude Code or Claude Desktop now gets the phone tools, the same as Option A but without a cable or ADB.
 
-Tools Claude gets: `get_screen` (numbered list of every element), `screenshot`, `tap_element`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_button` (back/home/recents/notifications…), `list_apps`, `launch_app` (by name or package), `open_url`, `wait`.
+Tools Claude gets: `get_screen` (short numbered list of the useful items), `screenshot`, `tap_id`, `tap_text`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_button` (back/home/recents/notifications…), `list_apps`, `launch_app` (by name or package), `open_url`, `wait_for`, `wait_gone`, `wait`. From 0.7 every action returns the new screen; see "Phone Pilot 0.7" below.
 
 ### Install
 1. Copy `PhonePilot.apk` to the phone and open it (allow "install unknown apps" for your file manager/browser when asked).
@@ -173,3 +173,77 @@ The APK compiles and packages correctly. The agent loop was tested against a moc
 - `batch` runs several steps in one round trip and stops at the first error:
   `phonectl.py PAIR batch '[["tap_element",{"index":16}],["type_text",{"text":"hello"}]]' --screen`
 - Fastest path: the Wi-Fi bridge plus a Cloudflare quick tunnel from Termux (`cloudflared tunnel --url http://localhost:8765`), used as `bridge:https://ADDRESS.trycloudflare.com#TOKEN`.
+
+### Phone Pilot 0.7: numbered items, waits and test scripts
+
+Needs the 0.7 app on the phone (build it from `android-app/`, see "Build it yourself"). The `PhonePilot.apk` in this folder is still 0.6: `phonectl.py` works with it, but the new tools below answer "Unknown tool".
+
+**Short screen layout.** `get_screen` now drops hidden, tiny, off-screen and empty layout items, plus the status and navigation bars, and prints one line per item:
+```
+Screen #12  app=com.example.storageplanner  size=1080x2400
+[1] TextView "Storage Planner"
+[4] LinearLayout "Box A | 3 items" (id=row) @540,610 [click,long]
+[5] Button "Save" (id=save_btn) @540,1820 [click]
+[6] EditText "" hint="Item name" (id=name) @540,900 [edit,focused]
+```
+A clickable row is named after the text inside it, and that text isn't listed again. `get_screen full=true` gives the old detailed listing (bounds, package, every element) for debugging.
+
+**Numbered items.** Each screen read numbers the items and remembers them. `tap_id 5` taps item 5, and `type_text text="Box A" id=6` types into item 6. Before acting, the phone checks the item is still there with the same id, text and position. If the screen changed, nothing is tapped and you get an error plus the new screen. `tap_element` still works as another name for `tap_id`. Numbers now start at 1.
+
+**Tap by text.** `tap_text "Add item"` (or `res_id=save_btn`) taps the best visible match: exact text first, then clickable items.
+
+**The new screen after every action.** `tap_id`, `tap_text`, `tap`, `type_text`, `swipe`, `scroll`, `press_button`, `launch_app`, `open_url`, `wait_for` and `wait_gone` wait for the screen to settle, then return
+```
+ok: Clicked [5] Button "Save". (UI settled in 240 ms)
+
+screen:
+Screen #13 ...
+```
+(`error: ...` when it failed). Pass `observe=false` to get just the first line. `batch` returns the screen once at the end.
+
+**Wait until.** `wait_for text="Saved" timeout=5` and `wait_gone text="Loading"` check the screen every 300 ms until it matches or the time runs out (default 5 s, max 60), and report how long it took: `Found "Saved" after 640 ms.` or `Timed out after 5000 ms: "Saved" did not appear.` (an error). Use these instead of fixed `wait`s.
+
+**Labelled screenshot fallback.** When the foreground app shows fewer than 2 readable items (games, drawing screens, some web views), `get_screen` and the screen returned after an action also attach a screenshot with numbered boxes, plus a 6-column grid of numbered cells. `tap_id` on a cell taps its centre; for exact spots use `tap` with pixel coordinates (the result gives the image-to-screen factor). Turn it off with `labels=false`, or force it on any screen with `get_screen labels=true` or `screenshot labels=true`.
+
+**Replayable test scripts.** `phonectl.py` can run a YAML step file on its own, with no Claude and no API key:
+```yaml
+app: com.example.storageplanner
+steps:
+  - launch
+  - tap: "Add item"
+  - type: "Box A"
+  - tap: "Save"
+  - assert_visible: "Box A"
+```
+```
+$ export PHONE_PAIRING="bridge:https://ADDRESS.trycloudflare.com#TOKEN"
+$ python phonectl.py run test.yaml
+Running test.yaml on com.example.storageplanner (5 steps)
+  PASS    1  launch com.example.storageplanner                       912 ms
+  PASS    2  tap "Add item"                                          430 ms
+  ...
+  FAIL    5  assert_visible "Box A"                                 3010 ms  Timed out after 3000 ms: "Box A" did not appear.
+              screenshot: /path/test-step5-fail.jpg
+              screen:     /path/test-step5-fail.txt
+FAILED: 4 passed, 1 failed in 6.1 s
+```
+It stops at the first failure (`--keep-going` carries on), saves a screenshot and the screen text of the failing step next to the script (`--out-dir` to change), and exits 1 on failure, so it fits in CI. The pairing can also be passed first (`phonectl.py PAIRING run test.yaml`) or put in the script as `pairing:`. PyYAML is used when installed; otherwise a built-in reader handles the simple YAML these scripts need.
+
+| Step | Does |
+|---|---|
+| `launch` / `launch: Settings` | Open the script's `app:` (or the named app) |
+| `tap: "Save"` / `tap: {text: "Save", exact: true}` / `tap: {id: save_btn}` / `tap: [540, 1820]` | Tap by text, resource id or position |
+| `tap_id: 5` | Tap item 5 of the latest screen |
+| `type: "Box A"` / `type: {text: "Box A", into: "Item name", submit: true}` | Type into the focused field, or tap the `into` field first |
+| `assert_visible: "Box A"` / `assert_gone: "Box A"` | Pass if it appears / disappears within the script's `timeout:` (default 3 s); also take `{text, id, exact, timeout}` |
+| `wait_for: "Saved"` / `wait_gone: "Loading"` | The same with a 5 s default |
+| `back`, `home`, `recents`, `press: back` | System buttons |
+| `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]` | Gestures |
+| `wait: 1.5`, `open_url: https://...`, `screenshot` | Pause, open a link, save a screenshot |
+
+`examples/storage-planner.yaml` is a starting point for the Storage Planner add, edit and delete flow. Change its labels to the app's real ones.
+
+**Command-line shortcuts.** Tool arguments can be `key=value` pairs instead of JSON, with a bare value going to the main parameter: `phonectl.py PAIR tap_id 5`, `phonectl.py PAIR wait_for text=Saved timeout=5`, `phonectl.py PAIR get_screen full=true`, `phonectl.py PAIR launch_app Settings`. With `PHONE_PAIRING` set, the pairing can be left out: `phonectl.py get_screen`.
+
+**Measuring the change.** Run the Storage Planner flow by hand with Claude on 0.6 and on 0.7 and compare steps, failures and time. Then run `examples/storage-planner.yaml` a few times: the per-step times and the PASS/FAIL count give a repeatable baseline.
+

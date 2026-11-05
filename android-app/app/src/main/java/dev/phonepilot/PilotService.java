@@ -6,10 +6,14 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Path;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.hardware.HardwareBuffer;
 import android.net.Uri;
 import android.os.Bundle;
@@ -31,8 +35,12 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,9 +63,6 @@ public class PilotService extends AccessibilityService {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService screenshotExecutor = Executors.newSingleThreadExecutor();
-
-    /** Elements from the last read of the screen, so Claude can refer to them by index. */
-    private final List<AccessibilityNodeInfo> lastNodes = new ArrayList<>();
 
     private View overlay;
     private TextView overlayText;
@@ -175,19 +180,50 @@ public class PilotService extends AccessibilityService {
 
     // ------------------------------------------------------------------ screen reading
 
+    /** One numbered item from the latest screen read. Grid cells have no node, only a position. */
+    static final class Elem {
+        int num;
+        AccessibilityNodeInfo node;     // null for screenshot grid cells
+        String pkg = "", cls = "View", text = "", desc = "", hint = "", resId = "", label = "";
+        final Rect b = new Rect();
+        boolean click, longClick, edit, scroll, checkable, checked, focused, enabled = true, password, selected;
+        boolean cell;
+        boolean childLabel;             // label was taken from the text inside it
+    }
+
     public static final class Screen {
         public String text;
         public String packageName;
+        public int seq;
+        /** Numbered items that belong to the foreground app (grid cells not counted). */
+        public int appItems;
+        /** Snapshot of the numbered items, for drawing labelled screenshots. */
+        List<Elem> items = new ArrayList<>();
     }
 
-    /** Reads every visible window (skipping our own overlay) into an indexed element list. */
-    public synchronized Screen readScreen() {
-        lastNodes.clear();
-        List<AccessibilityNodeInfo> roots = new ArrayList<>();
+    /** Number -> item, rebuilt on every screen read. tap_id and type_text look items up here. */
+    private final Map<Integer, Elem> numbered = new LinkedHashMap<>();
+    private int screenSeq = 0;
+
+    /** Fewer app items than this and the screen counts as unreadable (games, canvases, web views). */
+    static final int SPARSE_LIMIT = 2;
+
+    /**
+     * Reads every visible window (skipping our own overlay) and numbers the useful items.
+     * full=false: hidden, tiny, off-screen and empty layout items are dropped, one short line each.
+     * full=true: the older detailed listing of everything with text or an action, for debugging.
+     */
+    public synchronized Screen readScreen(boolean full) {
+        numbered.clear();
+        screenSeq++;
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        Rect screenRect = new Rect(0, 0, dm.widthPixels, dm.heightPixels);
+        int minPx = Math.max(4, Math.round(4 * dm.density));
+
         String activePkg = "";
-        List<AccessibilityWindowInfo> windows = getWindows();
+        List<AccessibilityNodeInfo> roots = new ArrayList<>();
+        List<AccessibilityWindowInfo> sorted = new ArrayList<>(getWindows());
         // Draw order: higher layer is on top. List the top-most windows first.
-        List<AccessibilityWindowInfo> sorted = new ArrayList<>(windows);
         Collections.sort(sorted, new Comparator<AccessibilityWindowInfo>() {
             @Override public int compare(AccessibilityWindowInfo a, AccessibilityWindowInfo b) {
                 return b.getLayer() - a.getLayer();
@@ -197,7 +233,14 @@ public class PilotService extends AccessibilityService {
             if (w.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue;
             AccessibilityNodeInfo r = w.getRoot();
             if (r == null) continue;
-            if (w.isActive() && r.getPackageName() != null) activePkg = r.getPackageName().toString();
+            String pkg = r.getPackageName() == null ? "" : r.getPackageName().toString();
+            if (w.isActive() && !pkg.isEmpty()) activePkg = pkg;
+            if (!full && pkg.equals("com.android.systemui")) {
+                // Status and navigation bars are noise for app testing; keep the shade and system dialogs.
+                Rect wb = new Rect();
+                w.getBoundsInScreen(wb);
+                if (wb.height() < dm.heightPixels * 0.15f) continue;
+            }
             roots.add(r);
         }
         if (roots.isEmpty()) {
@@ -208,60 +251,178 @@ public class PilotService extends AccessibilityService {
             }
         }
 
-        DisplayMetrics dm = getResources().getDisplayMetrics();
-        StringBuilder sb = new StringBuilder();
-        sb.append("Foreground app: ").append(activePkg)
-          .append("\nScreen size: ").append(dm.widthPixels).append('x').append(dm.heightPixels)
-          .append(" px (tap/swipe coordinates use these pixels)\nElements:\n");
-        for (AccessibilityNodeInfo r : roots) collect(r, sb, 0);
-        if (lastNodes.isEmpty()) sb.append("(no readable elements: the app may draw its own UI, use screenshot)\n");
+        List<Elem> out = new ArrayList<>();
+        Set<AccessibilityNodeInfo> consumed = new HashSet<>();
+        for (AccessibilityNodeInfo r : roots) {
+            String pkg = r.getPackageName() == null ? "" : r.getPackageName().toString();
+            walk(r, 0, out, full, screenRect, minPx, consumed, pkg);
+        }
 
         Screen s = new Screen();
-        s.text = sb.toString();
         s.packageName = activePkg;
+        s.seq = screenSeq;
+        StringBuilder sb = new StringBuilder();
+        if (full) {
+            sb.append("Foreground app: ").append(activePkg)
+              .append("\nScreen #").append(screenSeq).append(", size ").append(dm.widthPixels).append('x')
+              .append(dm.heightPixels).append(" px (tap/swipe coordinates use these pixels)\nElements:\n");
+        } else {
+            sb.append("Screen #").append(screenSeq).append("  app=").append(activePkg)
+              .append("  size=").append(dm.widthPixels).append('x').append(dm.heightPixels).append('\n');
+        }
+        int n = 1;
+        for (Elem e : out) {
+            e.num = n++;
+            numbered.put(e.num, e);
+            sb.append(full ? fullLine(e) : shortLine(e)).append('\n');
+            if (e.pkg.equals(activePkg)) s.appItems++;
+        }
+        if (out.isEmpty()) sb.append("(no readable items: the app may draw its own UI)\n");
+        s.items.addAll(out);
+        s.text = sb.toString();
         return s;
     }
 
-    private void collect(AccessibilityNodeInfo n, StringBuilder sb, int depth) {
+    /** Back-compat: the trimmed layout. */
+    public Screen readScreen() { return readScreen(false); }
+
+    private void walk(AccessibilityNodeInfo n, int depth, List<Elem> out, boolean full, Rect screen,
+                      int minPx, Set<AccessibilityNodeInfo> consumed, String pkg) {
         if (n == null || depth > 60) return;
         if (!n.isVisibleToUser()) return;
-        CharSequence text = n.getText();
-        CharSequence desc = n.getContentDescription();
-        CharSequence hint = n.getHintText();
+        Elem e = new Elem();
+        e.node = n;
+        e.pkg = pkg;
+        n.getBoundsInScreen(e.b);
+        e.text = str(n.getText());
+        e.desc = str(n.getContentDescription());
+        e.hint = str(n.getHintText());
         String id = n.getViewIdResourceName();
-        boolean interesting = n.isClickable() || n.isLongClickable() || n.isEditable()
-                || n.isCheckable() || n.isScrollable()
-                || (text != null && text.length() > 0) || (desc != null && desc.length() > 0);
-        if (interesting) {
-            int idx = lastNodes.size();
-            lastNodes.add(n);
-            Rect b = new Rect();
-            n.getBoundsInScreen(b);
-            String cls = n.getClassName() == null ? "View" : n.getClassName().toString();
-            cls = cls.substring(cls.lastIndexOf('.') + 1);
-            sb.append('[').append(idx).append("] ").append(cls);
-            if (text != null && text.length() > 0) sb.append(" text=\"").append(clip(text)).append('"');
-            if (desc != null && desc.length() > 0) sb.append(" desc=\"").append(clip(desc)).append('"');
-            if (hint != null && hint.length() > 0 && n.isEditable()) sb.append(" hint=\"").append(clip(hint)).append('"');
-            if (id != null) sb.append(" id=").append(id.substring(id.indexOf('/') + 1));
-            sb.append(" @(").append(b.centerX()).append(',').append(b.centerY()).append(')');
-            List<String> flags = new ArrayList<>();
-            if (n.isClickable()) flags.add("clickable");
-            if (n.isEditable()) flags.add("editable");
-            if (n.isScrollable()) flags.add("scrollable");
-            if (n.isCheckable()) flags.add(n.isChecked() ? "checked" : "unchecked");
-            if (n.isFocused()) flags.add("focused");
-            if (!n.isEnabled()) flags.add("disabled");
-            if (n.isPassword()) flags.add("password");
-            if (!flags.isEmpty()) sb.append(' ').append(join(flags));
-            sb.append('\n');
+        e.resId = id == null ? "" : id.substring(id.indexOf('/') + 1);
+        String cls = n.getClassName() == null ? "View" : n.getClassName().toString();
+        e.cls = cls.substring(cls.lastIndexOf('.') + 1);
+        e.click = n.isClickable();
+        e.longClick = n.isLongClickable();
+        e.edit = n.isEditable();
+        e.scroll = n.isScrollable();
+        e.checkable = n.isCheckable();
+        e.checked = n.isChecked();
+        e.focused = n.isFocused();
+        e.enabled = n.isEnabled();
+        e.password = n.isPassword();
+        e.selected = n.isSelected();
+        if (e.edit && n.isShowingHintText()) e.text = "";
+
+        boolean tappable = e.click || e.longClick || e.checkable;
+        boolean actionable = tappable || e.edit || e.scroll;
+        boolean hasText = !e.text.isEmpty() || !e.desc.isEmpty();
+
+        if (full) {
+            if (actionable || hasText) out.add(e);
+        } else {
+            boolean tiny = e.b.width() < minPx || e.b.height() < minPx;
+            boolean offScreen = !Rect.intersects(e.b, screen);
+            if (!tiny && !offScreen) {
+                e.label = !e.text.isEmpty() ? e.text : e.desc;
+                if (tappable && e.label.isEmpty()) {
+                    // A clickable row or card: name it after the text inside it, and don't list that text again.
+                    e.label = descendantText(n, 6, 3, consumed);
+                    e.childLabel = !e.label.isEmpty();
+                }
+                if (actionable) {
+                    // Drop empty layout items: clickable containers with nothing to identify them by.
+                    if (!e.label.isEmpty() || e.edit || e.scroll || e.checkable || !e.resId.isEmpty()) out.add(e);
+                } else if (hasText && !consumed.contains(n)) {
+                    out.add(e);
+                }
+            }
         }
-        for (int i = 0; i < n.getChildCount(); i++) collect(n.getChild(i), sb, depth + 1);
+        for (int i = 0; i < n.getChildCount(); i++)
+            walk(n.getChild(i), depth + 1, out, full, screen, minPx, consumed, pkg);
     }
+
+    /** Text of up to max visible descendants, joined, for naming a clickable container. */
+    private static String descendantText(AccessibilityNodeInfo n, int depthLeft, int max,
+                                         Set<AccessibilityNodeInfo> consumed) {
+        List<String> parts = new ArrayList<>();
+        collectText(n, depthLeft, max, parts, consumed);
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) { if (sb.length() > 0) sb.append(" | "); sb.append(p); }
+        return sb.toString();
+    }
+
+    private static void collectText(AccessibilityNodeInfo n, int depthLeft, int max, List<String> parts,
+                                    Set<AccessibilityNodeInfo> consumed) {
+        for (int i = 0; i < n.getChildCount() && parts.size() < max; i++) {
+            AccessibilityNodeInfo c = n.getChild(i);
+            if (c == null || !c.isVisibleToUser()) continue;
+            String t = str(c.getText());
+            if (t.isEmpty()) t = str(c.getContentDescription());
+            boolean ownAction = c.isClickable() || c.isEditable() || c.isCheckable();
+            if (ownAction) continue;   // listed on its own line
+            if (!t.isEmpty()) { parts.add(t); consumed.add(c); }
+            else if (depthLeft > 0) collectText(c, depthLeft - 1, max, parts, consumed);
+        }
+    }
+
+    /** [5] Button "Save" (id=save_btn) @540,1820 [click] */
+    private static String shortLine(Elem e) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[').append(e.num).append("] ").append(e.cls);
+        if (e.edit) {
+            sb.append(" \"").append(e.password && !e.text.isEmpty() ? "••••" : clip(e.text)).append('"');
+            if (!e.hint.isEmpty()) sb.append(" hint=\"").append(clip(e.hint)).append('"');
+        } else if (!e.label.isEmpty()) {
+            sb.append(" \"").append(clip(e.label)).append('"');
+        }
+        if (!e.desc.isEmpty() && !e.desc.equals(e.label)) sb.append(" desc=\"").append(clip(e.desc)).append('"');
+        if (!e.resId.isEmpty()) sb.append(" (id=").append(e.resId).append(')');
+        sb.append(" @").append(e.b.centerX()).append(',').append(e.b.centerY());
+        List<String> f = new ArrayList<>();
+        if (e.click) f.add("click");
+        if (e.longClick) f.add("long");
+        if (e.edit) f.add("edit");
+        if (e.scroll) f.add("scroll");
+        if (e.checkable) f.add(e.checked ? "checked" : "unchecked");
+        if (e.selected) f.add("selected");
+        if (e.focused) f.add("focused");
+        if (!e.enabled) f.add("disabled");
+        if (e.password) f.add("password");
+        if (!f.isEmpty()) sb.append(" [").append(join(f)).append(']');
+        return sb.toString();
+    }
+
+    /** The older, detailed format (get_screen full=true). */
+    private static String fullLine(Elem e) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[').append(e.num).append("] ").append(e.cls);
+        if (!e.text.isEmpty()) sb.append(" text=\"").append(clip(e.text)).append('"');
+        if (!e.desc.isEmpty()) sb.append(" desc=\"").append(clip(e.desc)).append('"');
+        if (!e.hint.isEmpty() && e.edit) sb.append(" hint=\"").append(clip(e.hint)).append('"');
+        if (!e.resId.isEmpty()) sb.append(" id=").append(e.resId);
+        sb.append(" @(").append(e.b.centerX()).append(',').append(e.b.centerY()).append(')');
+        sb.append(" bounds=[").append(e.b.left).append(',').append(e.b.top).append("][")
+          .append(e.b.right).append(',').append(e.b.bottom).append(']');
+        if (!e.pkg.isEmpty()) sb.append(" pkg=").append(e.pkg);
+        List<String> flags = new ArrayList<>();
+        if (e.click) flags.add("clickable");
+        if (e.longClick) flags.add("long-clickable");
+        if (e.edit) flags.add("editable");
+        if (e.scroll) flags.add("scrollable");
+        if (e.checkable) flags.add(e.checked ? "checked" : "unchecked");
+        if (e.selected) flags.add("selected");
+        if (e.focused) flags.add("focused");
+        if (!e.enabled) flags.add("disabled");
+        if (e.password) flags.add("password");
+        if (!flags.isEmpty()) sb.append(' ').append(join(flags));
+        return sb.toString();
+    }
+
+    private static String str(CharSequence c) { return c == null ? "" : c.toString().trim(); }
 
     private static String clip(CharSequence c) {
         String s = c.toString().replace('\n', ' ');
-        return s.length() > 120 ? s.substring(0, 117) + "..." : s;
+        return s.length() > 80 ? s.substring(0, 77) + "..." : s;
     }
 
     private static String join(List<String> l) {
@@ -270,33 +431,189 @@ public class PilotService extends AccessibilityService {
         return sb.toString();
     }
 
-    public synchronized AccessibilityNodeInfo node(int index) {
-        if (index < 0 || index >= lastNodes.size()) return null;
-        AccessibilityNodeInfo n = lastNodes.get(index);
-        n.refresh();
-        return n;
+    /**
+     * Adds numbered grid cells to the current numbering, so screens with no readable items can
+     * still be tapped by number (tap_id on a cell taps its centre). Returns the cells added.
+     */
+    synchronized List<Elem> addGridCells(int cols) {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int cw = dm.widthPixels / cols;
+        int rows = Math.max(1, Math.round((float) dm.heightPixels / cw));
+        int ch = dm.heightPixels / rows;
+        int n = numbered.size() + 1;
+        List<Elem> cells = new ArrayList<>();
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                Elem e = new Elem();
+                e.cell = true;
+                e.cls = "Cell";
+                e.num = n++;
+                e.b.set(c * cw, r * ch, c == cols - 1 ? dm.widthPixels : (c + 1) * cw,
+                        r == rows - 1 ? dm.heightPixels : (r + 1) * ch);
+                numbered.put(e.num, e);
+                cells.add(e);
+            }
+        }
+        return cells;
+    }
+
+    synchronized int currentSeq() { return screenSeq; }
+
+    /**
+     * Looks up a number from the latest screen read and checks the item is still there and
+     * unchanged. On a problem returns null and puts the reason in why.
+     */
+    synchronized Elem resolve(int num, StringBuilder why) {
+        Elem e = numbered.get(num);
+        if (e == null) {
+            why.append("No item [").append(num).append("] on screen #").append(screenSeq)
+               .append(" (it has ").append(numbered.size()).append(" items). Nothing was done.");
+            return null;
+        }
+        if (e.cell) return e;
+        String changed = null;
+        AccessibilityNodeInfo n = e.node;
+        if (!n.refresh() || !n.isVisibleToUser()) {
+            changed = "it is no longer on screen";
+        } else {
+            Rect b = new Rect();
+            n.getBoundsInScreen(b);
+            int tol = Math.max(4, Math.round(8 * getResources().getDisplayMetrics().density));
+            String id = n.getViewIdResourceName();
+            id = id == null ? "" : id.substring(id.indexOf('/') + 1);
+            String text = str(n.getText());
+            if (n.isEditable() && n.isShowingHintText()) text = "";
+            if (!id.equals(e.resId)) changed = "a different item is there now";
+            else if (Math.abs(b.centerX() - e.b.centerX()) > tol || Math.abs(b.centerY() - e.b.centerY()) > tol)
+                changed = "it moved from " + e.b.centerX() + "," + e.b.centerY() + " to " + b.centerX() + "," + b.centerY();
+            else if (!e.edit && !text.equals(e.text)) changed = "its text changed to \"" + clip(text) + "\"";
+            else if (!str(n.getContentDescription()).equals(e.desc)) changed = "its description changed";
+            else if (e.childLabel && !descendantText(n, 6, 3, new HashSet<AccessibilityNodeInfo>()).equals(e.label))
+                changed = "its text changed";  // e.g. a recycled list row now showing another item
+        }
+        if (changed != null) {
+            why.append("The screen has changed since screen #").append(screenSeq).append(" was read: item [")
+               .append(num).append("] ").append(describe(e)).append(' ').append(changed)
+               .append(". Nothing was tapped; read the screen again and use the new numbers.");
+            return null;
+        }
+        return e;
+    }
+
+    static String describe(Elem e) {
+        if (e.cell) return "cell @" + e.b.centerX() + "," + e.b.centerY();
+        String l = !e.label.isEmpty() ? e.label : !e.text.isEmpty() ? e.text : !e.desc.isEmpty() ? e.desc
+                : !e.hint.isEmpty() ? e.hint : e.resId;
+        return e.cls + (l.isEmpty() ? "" : " \"" + clip(l) + "\"");
+    }
+
+    /**
+     * Visible nodes whose text, description or hint contains text (case-insensitive; equal when exact),
+     * and whose resource id ends with resId when given. Top-most windows first.
+     */
+    public List<AccessibilityNodeInfo> findNodes(String text, String resId, boolean exact) {
+        List<AccessibilityNodeInfo> found = new ArrayList<>();
+        String want = text == null ? "" : text.trim().toLowerCase(Locale.ROOT);
+        String rid = resId == null ? "" : resId.trim();
+        if (want.isEmpty() && rid.isEmpty()) return found;
+        List<AccessibilityWindowInfo> sorted = new ArrayList<>(getWindows());
+        Collections.sort(sorted, new Comparator<AccessibilityWindowInfo>() {
+            @Override public int compare(AccessibilityWindowInfo a, AccessibilityWindowInfo b) {
+                return b.getLayer() - a.getLayer();
+            }
+        });
+        List<AccessibilityNodeInfo> roots = new ArrayList<>();
+        for (AccessibilityWindowInfo w : sorted) {
+            if (w.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue;
+            AccessibilityNodeInfo r = w.getRoot();
+            if (r != null) roots.add(r);
+        }
+        if (roots.isEmpty()) {
+            AccessibilityNodeInfo r = getRootInActiveWindow();
+            if (r != null) roots.add(r);
+        }
+        for (AccessibilityNodeInfo r : roots) find(r, 0, want, rid, exact, found);
+        return found;
+    }
+
+    private static void find(AccessibilityNodeInfo n, int depth, String want, String rid, boolean exact,
+                             List<AccessibilityNodeInfo> found) {
+        if (n == null || depth > 60 || !n.isVisibleToUser()) return;
+        boolean ok = true;
+        if (!rid.isEmpty()) {
+            String id = n.getViewIdResourceName();
+            ok = id != null && (id.equals(rid) || id.endsWith("/" + rid));
+        }
+        if (ok && !want.isEmpty()) {
+            ok = matches(n.getText(), want, exact) || matches(n.getContentDescription(), want, exact)
+                    || (n.isEditable() && matches(n.getHintText(), want, exact));
+        }
+        if (ok) found.add(n);
+        for (int i = 0; i < n.getChildCount(); i++) find(n.getChild(i), depth + 1, want, rid, exact, found);
+    }
+
+    private static boolean matches(CharSequence c, String want, boolean exact) {
+        if (c == null) return false;
+        String s = c.toString().trim().toLowerCase(Locale.ROOT);
+        return exact ? s.equals(want) : s.contains(want);
     }
 
     // ------------------------------------------------------------------ actions
 
-    public String tapElement(int index) {
-        AccessibilityNodeInfo n = node(index);
-        if (n == null) return "No element " + index + ". Call get_screen again.";
+    /** Tap the item with this number from the latest screen read (tap_id). */
+    public Outcome tapId(int num) {
+        StringBuilder why = new StringBuilder();
+        Elem e = resolve(num, why);
+        if (e == null) return Outcome.fail(why.toString());
+        String what = "[" + num + "] " + describe(e);
+        if (e.cell) {
+            String r = tap(e.b.centerX(), e.b.centerY());
+            return r.startsWith("Tapped") ? Outcome.ok("Tapped " + what + ".") : Outcome.fail(r);
+        }
+        return clickNode(e.node, what);
+    }
+
+    /** Click a node (or its nearest clickable parent), falling back to a finger tap at its centre. */
+    Outcome clickNode(AccessibilityNodeInfo n, String what) {
         Rect b = new Rect();
         n.getBoundsInScreen(b);
-        // Prefer a real click on the element (or its nearest clickable parent).
         AccessibilityNodeInfo c = n;
         for (int i = 0; c != null && i < 5; i++) {
             if (c.isClickable() && c.isEnabled()) {
-                if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    return "Clicked element " + index + ".";
-                }
+                if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return Outcome.ok("Clicked " + what + ".");
                 break;
             }
             c = c.getParent();
         }
-        // Fall back to a finger tap at the element's centre.
-        return tap(b.centerX(), b.centerY()) + " (gesture tap on element " + index + ")";
+        String r = tap(b.centerX(), b.centerY());
+        return r.startsWith("Tapped") ? Outcome.ok(r + " (finger tap on " + what + ")") : Outcome.fail(r);
+    }
+
+    /** Tap the best visible match for text/resId: exact text first, then clickable, then anything. */
+    public Outcome tapText(String text, String resId, boolean exact) {
+        List<AccessibilityNodeInfo> found = findNodes(text, resId, exact);
+        String what = (text == null || text.isEmpty() ? "" : "\"" + text + "\"")
+                + (resId == null || resId.isEmpty() ? "" : " (id=" + resId + ")");
+        if (found.isEmpty()) return Outcome.fail("Nothing matching " + what.trim() + " is on screen. Nothing was tapped.");
+        AccessibilityNodeInfo best = null;
+        int bestScore = -1;
+        String want = text == null ? "" : text.trim().toLowerCase(Locale.ROOT);
+        for (AccessibilityNodeInfo n : found) {
+            int score = 0;
+            if (!want.isEmpty() && (matches(n.getText(), want, true) || matches(n.getContentDescription(), want, true))) score += 2;
+            if (n.isClickable() || (n.getParent() != null && n.getParent().isClickable())) score += 1;
+            if (score > bestScore) { best = n; bestScore = score; }
+        }
+        return clickNode(best, what.trim());
+    }
+
+    /** Result of an action: whether it worked, and a message. */
+    public static final class Outcome {
+        public final boolean ok;
+        public final String msg;
+        private Outcome(boolean ok, String msg) { this.ok = ok; this.msg = msg; }
+        static Outcome ok(String m) { return new Outcome(true, m); }
+        static Outcome fail(String m) { return new Outcome(false, m); }
     }
 
     public String tap(int x, int y) {
@@ -342,24 +659,33 @@ public class PilotService extends AccessibilityService {
         return ok.get();
     }
 
-    public String typeText(String text, int index, boolean submit, boolean append) {
-        AccessibilityNodeInfo target = index >= 0 ? node(index) : null;
-        if (target == null) target = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-        if (target == null) return "No text field is focused. Tap a field first or pass its index.";
+    /** Type into item [num] from the latest screen read, or into the focused field when num < 0. */
+    public Outcome typeText(String text, int num, boolean submit, boolean append) {
+        AccessibilityNodeInfo target;
+        if (num >= 0) {
+            StringBuilder why = new StringBuilder();
+            Elem e = resolve(num, why);
+            if (e == null) return Outcome.fail(why.toString());
+            if (e.cell) return Outcome.fail("[" + num + "] is a screenshot grid cell, not a text field. Tap it, then type without a number.");
+            target = e.node;
+        } else {
+            target = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        }
+        if (target == null) return Outcome.fail("No text field is focused. Tap a field first or pass its number.");
         if (!target.isFocused()) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
         String value = text;
         if (append && target.getText() != null && !target.isShowingHintText()) value = target.getText() + text;
         Bundle args = new Bundle();
         args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
         boolean ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-        if (!ok) return "This field did not accept text.";
+        if (!ok) return Outcome.fail("This field did not accept text.");
         String r = "Typed \"" + text + "\".";
         if (submit) {
             boolean entered = target.performAction(
                     AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
             r += entered ? " Pressed Enter." : " Enter was not accepted; tap the submit button instead.";
         }
-        return r;
+        return Outcome.ok(r);
     }
 
     public String pressButton(String button) {
@@ -441,8 +767,13 @@ public class PilotService extends AccessibilityService {
         public String error;
     }
 
-    /** Screenshot as a JPEG scaled so the longest side is at most maxSide. Android 11+. */
-    public Shot screenshot(int maxSide) {
+    public Shot screenshot(int maxSide) { return screenshot(maxSide, null); }
+
+    /**
+     * Screenshot as a JPEG scaled so the longest side is at most maxSide. Android 11+.
+     * When labels is given, each item is drawn as a numbered box (the numbers tap_id uses).
+     */
+    public Shot screenshot(int maxSide, List<Elem> labels) {
         final Shot shot = new Shot();
         final AtomicReference<Bitmap> bmp = new AtomicReference<>();
         final AtomicReference<String> err = new AtomicReference<>();
@@ -475,12 +806,63 @@ public class PilotService extends AccessibilityService {
         Bitmap scaled = scale < 1f
                 ? Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * scale), Math.round(b.getHeight() * scale), true)
                 : b;
+        if (labels != null && !labels.isEmpty()) {
+            if (!scaled.isMutable()) scaled = scaled.copy(Bitmap.Config.ARGB_8888, true);
+            drawLabels(new Canvas(scaled), labels, (float) scaled.getWidth() / b.getWidth());
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         scaled.compress(Bitmap.CompressFormat.JPEG, 70, out);
         shot.jpeg = out.toByteArray();
         shot.width = scaled.getWidth();
         shot.height = scaled.getHeight();
         return shot;
+    }
+
+    private static final int[] BOX_COLORS = {
+            Color.rgb(230, 25, 75), Color.rgb(0, 130, 200), Color.rgb(60, 180, 75), Color.rgb(245, 130, 48),
+            Color.rgb(145, 30, 180), Color.rgb(0, 150, 150), Color.rgb(200, 20, 160), Color.rgb(120, 90, 0)};
+
+    /** Numbered boxes: items get a coloured outline and tag, grid cells a faint outline and centred number. */
+    private static void drawLabels(Canvas c, List<Elem> items, float f) {
+        float density = Math.max(1f, c.getWidth() / 400f);
+        Paint box = new Paint(Paint.ANTI_ALIAS_FLAG);
+        box.setStyle(Paint.Style.STROKE);
+        Paint tagBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Paint txt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        txt.setColor(Color.WHITE);
+        txt.setTypeface(Typeface.DEFAULT_BOLD);
+        Paint.FontMetrics fm;
+        for (Elem e : items) {
+            RectF r = new RectF(e.b.left * f, e.b.top * f, e.b.right * f, e.b.bottom * f);
+            String label = String.valueOf(e.num);
+            if (e.cell) {
+                box.setColor(Color.argb(110, 255, 255, 255));
+                box.setStrokeWidth(1f);
+                c.drawRect(r, box);
+                txt.setTextSize(9f * density);
+                float w = txt.measureText(label) + 4 * density;
+                fm = txt.getFontMetrics();
+                float h = fm.descent - fm.ascent + 2 * density;
+                tagBg.setColor(Color.argb(150, 0, 0, 0));
+                RectF t = new RectF(r.centerX() - w / 2, r.centerY() - h / 2, r.centerX() + w / 2, r.centerY() + h / 2);
+                c.drawRoundRect(t, 3 * density, 3 * density, tagBg);
+                c.drawText(label, t.left + 2 * density, t.top + density - fm.ascent, txt);
+                continue;
+            }
+            int col = BOX_COLORS[e.num % BOX_COLORS.length];
+            box.setColor(col);
+            box.setStrokeWidth(2f * density / 2);
+            c.drawRect(r, box);
+            txt.setTextSize(10f * density);
+            fm = txt.getFontMetrics();
+            float w = txt.measureText(label) + 4 * density;
+            float h = fm.descent - fm.ascent + 2 * density;
+            float top = r.top - h >= 0 ? r.top - h : r.top;  // above the box if there is room
+            RectF t = new RectF(r.left, top, r.left + w, top + h);
+            tagBg.setColor(col);
+            c.drawRect(t, tagBg);
+            c.drawText(label, t.left + 2 * density, t.top + density - fm.ascent, txt);
+        }
     }
 
     static void sleep(long ms) {

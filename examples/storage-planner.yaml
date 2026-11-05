@@ -1,0 +1,31 @@
+# Storage Planner: add, edit and delete an item.
+# Run with:  python phonectl.py run examples/storage-planner.yaml
+# (pairing from PHONE_PAIRING, or pass it first: phonectl.py "bridge:https://...#TOKEN" run ...)
+#
+# The button and field names below are placeholders: change them to the app's real labels
+# (run `phonectl.py get_screen` on each screen to see them).
+name: Storage Planner add / edit / delete
+app: com.example.storageplanner
+timeout: 4            # seconds each assert_visible / assert_gone may wait
+steps:
+  - launch
+  - wait_gone: "Loading"
+
+  # add
+  - tap: "Add item"
+  - type: {text: "Box A", into: "Item name"}
+  - tap: "Save"
+  - assert_visible: "Box A"
+
+  # edit
+  - tap: "Box A"
+  - tap: "Edit"
+  - type: {text: "Box A (books)", into: "Box A"}
+  - tap: "Save"
+  - assert_visible: "Box A (books)"
+
+  # delete
+  - tap: "Box A (books)"
+  - tap: "Delete"
+  - tap: {text: "Delete", exact: true}     # confirm dialog
+  - assert_gone: "Box A (books)"

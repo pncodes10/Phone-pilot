@@ -119,7 +119,8 @@ public final class RemoteServer {
                 svc.keepAwake();
                 String problem = svc.screenProblem();
                 boolean readOnly = name.equals("get_screen") || name.equals("screenshot")
-                        || name.equals("list_apps") || name.equals("wait");
+                        || name.equals("list_apps") || name.equals("wait")
+                        || name.equals("wait_for") || name.equals("wait_gone");
                 DeviceTools.Result r = (problem != null && !readOnly)
                         ? new DeviceTools.Result(problem + " Ask the user to unlock it; nothing was done.", null, true)
                         : svc.tools.run(name, input);
