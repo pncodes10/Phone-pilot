@@ -10,7 +10,7 @@ DX=$(command -v dx || command -v dalvik-exchange)
 OUT=build/manual; rm -rf "$OUT"; mkdir -p "$OUT/classes" "$OUT/gen"
 
 # aapt needs the package name and SDK levels in the manifest (Gradle injects them normally).
-sed -e 's#<manifest xmlns:android="http://schemas.android.com/apk/res/android">#<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.phonepilot" android:versionCode="7" android:versionName="0.7">\n    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />#' \
+sed -e 's#<manifest xmlns:android="http://schemas.android.com/apk/res/android">#<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.phonepilot" android:versionCode="8" android:versionName="0.7.1">\n    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="34" />#' \
     app/src/main/AndroidManifest.xml > "$OUT/AndroidManifest.xml"
 
 aapt package -f -m -J "$OUT/gen" -M "$OUT/AndroidManifest.xml" -S app/src/main/res -I "$ANDROID_JAR" -F "$OUT/unsigned.apk"

@@ -219,7 +219,16 @@ public final class DeviceTools {
                     return ok(svc.listApps(in.optString("filter", "")));
                 case "launch_app": {
                     PilotService.Outcome o = outcome(svc.launchApp(in.getString("app")), "Launched");
-                    if (o.ok) svc.waitForIdle(400, 500, 4000);
+                    if (o.ok) {
+                        String pkg = o.msg.substring("Launched ".length()).replaceAll("\\.$", "");
+                        long t0 = SystemClock.uptimeMillis();
+                        while (SystemClock.uptimeMillis() - t0 < 8000) {
+                            if (pkg.equals(svc.activePackage())) break;
+                            PilotService.sleep(150);
+                        }
+                        svc.waitForIdle(300, 500, 4000);
+                        o = PilotService.Outcome.ok(o.msg + " In front after " + (SystemClock.uptimeMillis() - t0) + " ms.");
+                    }
                     return act(in, o, false);
                 }
                 case "open_url": {
@@ -277,6 +286,11 @@ public final class DeviceTools {
 
     private Observed view(boolean full, String labels) {
         PilotService.Screen s = svc.readScreen(full);
+        for (int i = 0; i < 3 && s.appItems < PilotService.SPARSE_LIMIT && !labels.equals("false"); i++) {
+            // Often just a screen that hasn't drawn yet; look again before falling back to a screenshot.
+            PilotService.sleep(400);
+            s = svc.readScreen(full);
+        }
         Observed v = new Observed();
         StringBuilder sb = new StringBuilder(s.text);
         boolean sparse = s.appItems < PilotService.SPARSE_LIMIT;

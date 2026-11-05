@@ -180,6 +180,29 @@ public class PilotService extends AccessibilityService {
 
     // ------------------------------------------------------------------ screen reading
 
+    /** Full screen size including the navigation bar (the app-area metrics leave it out). */
+    @SuppressWarnings("deprecation")
+    DisplayMetrics realMetrics() {
+        DisplayMetrics dm = new DisplayMetrics();
+        try {
+            ((WindowManager) getSystemService(WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(dm);
+            if (dm.widthPixels > 0 && dm.heightPixels > 0) return dm;
+        } catch (Exception ignored) { }
+        return getResources().getDisplayMetrics();
+    }
+
+    /** Package of the active window, or "" while switching. */
+    String activePackage() {
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                if (!w.isActive()) continue;
+                AccessibilityNodeInfo r = w.getRoot();
+                if (r != null && r.getPackageName() != null) return r.getPackageName().toString();
+            }
+        } catch (Exception ignored) { }
+        return "";
+    }
+
     /** One numbered item from the latest screen read. Grid cells have no node, only a position. */
     static final class Elem {
         int num;
@@ -216,7 +239,7 @@ public class PilotService extends AccessibilityService {
     public synchronized Screen readScreen(boolean full) {
         numbered.clear();
         screenSeq++;
-        DisplayMetrics dm = getResources().getDisplayMetrics();
+        DisplayMetrics dm = realMetrics();
         Rect screenRect = new Rect(0, 0, dm.widthPixels, dm.heightPixels);
         int minPx = Math.max(4, Math.round(4 * dm.density));
 
@@ -255,7 +278,7 @@ public class PilotService extends AccessibilityService {
         Set<AccessibilityNodeInfo> consumed = new HashSet<>();
         for (AccessibilityNodeInfo r : roots) {
             String pkg = r.getPackageName() == null ? "" : r.getPackageName().toString();
-            walk(r, 0, out, full, screenRect, minPx, consumed, pkg);
+            walk(r, 0, out, full, screenRect, minPx, consumed, pkg, "");
         }
 
         Screen s = new Screen();
@@ -287,7 +310,7 @@ public class PilotService extends AccessibilityService {
     public Screen readScreen() { return readScreen(false); }
 
     private void walk(AccessibilityNodeInfo n, int depth, List<Elem> out, boolean full, Rect screen,
-                      int minPx, Set<AccessibilityNodeInfo> consumed, String pkg) {
+                      int minPx, Set<AccessibilityNodeInfo> consumed, String pkg, String parentLabel) {
         if (n == null || depth > 60) return;
         if (!n.isVisibleToUser()) return;
         Elem e = new Elem();
@@ -332,13 +355,15 @@ public class PilotService extends AccessibilityService {
                 if (actionable) {
                     // Drop empty layout items: clickable containers with nothing to identify them by.
                     if (!e.label.isEmpty() || e.edit || e.scroll || e.checkable || !e.resId.isEmpty()) out.add(e);
-                } else if (hasText && !consumed.contains(n)) {
+                } else if (hasText && !consumed.contains(n)
+                        && !(parentLabel.equals(e.text.isEmpty() ? e.desc : e.text))) {
                     out.add(e);
                 }
             }
         }
+        String passLabel = (e.click || e.longClick || e.checkable) && !e.label.isEmpty() ? e.label : parentLabel;
         for (int i = 0; i < n.getChildCount(); i++)
-            walk(n.getChild(i), depth + 1, out, full, screen, minPx, consumed, pkg);
+            walk(n.getChild(i), depth + 1, out, full, screen, minPx, consumed, pkg, passLabel);
     }
 
     /** Text of up to max visible descendants, joined, for naming a clickable container. */
@@ -436,7 +461,7 @@ public class PilotService extends AccessibilityService {
      * still be tapped by number (tap_id on a cell taps its centre). Returns the cells added.
      */
     synchronized List<Elem> addGridCells(int cols) {
-        DisplayMetrics dm = getResources().getDisplayMetrics();
+        DisplayMetrics dm = realMetrics();
         int cw = dm.widthPixels / cols;
         int rows = Math.max(1, Math.round((float) dm.heightPixels / cw));
         int ch = dm.heightPixels / rows;
@@ -629,7 +654,7 @@ public class PilotService extends AccessibilityService {
     }
 
     public String scroll(String direction) {
-        DisplayMetrics dm = getResources().getDisplayMetrics();
+        DisplayMetrics dm = realMetrics();
         int w = dm.widthPixels, h = dm.heightPixels;
         int cx = w / 2, cy = h / 2;
         switch (direction.toLowerCase(Locale.US)) {
@@ -668,6 +693,8 @@ public class PilotService extends AccessibilityService {
             if (e == null) return Outcome.fail(why.toString());
             if (e.cell) return Outcome.fail("[" + num + "] is a screenshot grid cell, not a text field. Tap it, then type without a number.");
             target = e.node;
+            if (!target.isEditable())
+                return Outcome.fail("[" + num + "] " + describe(e) + " is not a text field. Nothing was typed.");
         } else {
             target = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
         }

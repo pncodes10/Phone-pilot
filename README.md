@@ -243,7 +243,7 @@ It stops at the first failure (`--keep-going` carries on), saves a screenshot an
 | `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]` | Gestures |
 | `wait: 1.5`, `open_url: https://...`, `screenshot` | Pause, open a link, save a screenshot |
 
-`examples/storage-planner.yaml` is a starting point for the Storage Planner add, edit and delete flow. Change its labels to the app's real ones.
+`examples/storage-planner.yaml` is a read-only smoke test of Storage Planner (`com.storageplanner`): main screen, the target field, and Algorithm Lab.
 
 **Command-line shortcuts.** Tool arguments can be `key=value` pairs instead of JSON, with a bare value going to the main parameter: `phonectl.py PAIR tap_id 5`, `phonectl.py PAIR wait_for text=Saved timeout=5`, `phonectl.py PAIR get_screen full=true`, `phonectl.py PAIR launch_app Settings`. With `PHONE_PAIRING` set, the pairing can be left out: `phonectl.py get_screen`.
 
