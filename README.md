@@ -176,7 +176,9 @@ The APK compiles and packages correctly. The agent loop was tested against a moc
 
 ### Phone Pilot 0.7: numbered items, waits and test scripts
 
-Needs the 0.7 app on the phone (build it from `android-app/`, see "Build it yourself"). The `PhonePilot.apk` in this folder is still 0.6: `phonectl.py` works with it, but the new tools below answer "Unknown tool".
+Needs the 0.7 app on the phone: `PhonePilot.apk` in this folder is 0.7. With an older app, `phonectl.py` still works but the new tools below answer "Unknown tool".
+
+**Updating to 0.7:** this build is signed with a new debug key (certificate SHA-256 `699d419c…658b55`), so Android won't install it over 0.6. Uninstall the old Phone Pilot first, install 0.7, then turn its accessibility service on again (and "Allow restricted settings" again on Android 13+). Later builds signed with the same keystore install as normal updates.
 
 **Short screen layout.** `get_screen` now drops hidden, tiny, off-screen and empty layout items, plus the status and navigation bars, and prints one line per item:
 ```
