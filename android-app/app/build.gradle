@@ -10,8 +10,8 @@ android {
         applicationId 'dev.phonepilot'
         minSdk 30          // Android 11+: needed for accessibility screenshots
         targetSdk 34
-        versionCode 8
-        versionName '0.7.1'
+        versionCode 9
+        versionName '0.7.2'
     }
 
     compileOptions {

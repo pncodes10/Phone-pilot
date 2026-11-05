@@ -165,6 +165,26 @@ public class PilotService extends AccessibilityService {
         }
     }
 
+    /**
+     * Settle after an action that started at actionStart (uptime ms): wait for the screen to start
+     * changing (up to 1 s; some transitions begin 300-600 ms after the tap or key), then until it has
+     * been quiet for 300 ms. Returns ms waited since actionStart.
+     */
+    long settleAfter(long actionStart) {
+        long now;
+        while (true) {
+            now = android.os.SystemClock.uptimeMillis();
+            if (lastUiEvent > actionStart || now - actionStart >= 1000) break;
+            sleep(50);
+        }
+        while (true) {
+            now = android.os.SystemClock.uptimeMillis();
+            if (now - actionStart >= 3000 || (now - lastUiEvent >= 300 && now - actionStart >= 300)) break;
+            sleep(50);
+        }
+        return now - actionStart;
+    }
+
     @Override
     public void onInterrupt() { }
 
@@ -244,6 +264,7 @@ public class PilotService extends AccessibilityService {
         int minPx = Math.max(4, Math.round(4 * dm.density));
 
         String activePkg = "";
+        int keyboardTop = -1;
         List<AccessibilityNodeInfo> roots = new ArrayList<>();
         List<AccessibilityWindowInfo> sorted = new ArrayList<>(getWindows());
         // Draw order: higher layer is on top. List the top-most windows first.
@@ -258,6 +279,13 @@ public class PilotService extends AccessibilityService {
             if (r == null) continue;
             String pkg = r.getPackageName() == null ? "" : r.getPackageName().toString();
             if (w.isActive() && !pkg.isEmpty()) activePkg = pkg;
+            if (!full && w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                // The keyboard's keys are noise for app testing: one line instead of dozens.
+                Rect wb = new Rect();
+                w.getBoundsInScreen(wb);
+                keyboardTop = wb.top;
+                continue;
+            }
             if (!full && pkg.equals("com.android.systemui")) {
                 // Status and navigation bars are noise for app testing; keep the shade and system dialogs.
                 Rect wb = new Rect();
@@ -292,6 +320,8 @@ public class PilotService extends AccessibilityService {
         } else {
             sb.append("Screen #").append(screenSeq).append("  app=").append(activePkg)
               .append("  size=").append(dm.widthPixels).append('x').append(dm.heightPixels).append('\n');
+            if (keyboardTop >= 0) sb.append("Keyboard open from y=").append(keyboardTop)
+                    .append(" (type_text doesn't need it; press back to hide it)\n");
         }
         int n = 1;
         for (Elem e : out) {
@@ -337,6 +367,7 @@ public class PilotService extends AccessibilityService {
         if (e.edit && n.isShowingHintText()) e.text = "";
 
         boolean tappable = e.click || e.longClick || e.checkable;
+        boolean kept = false;
         boolean actionable = tappable || e.edit || e.scroll;
         boolean hasText = !e.text.isEmpty() || !e.desc.isEmpty();
 
@@ -354,14 +385,15 @@ public class PilotService extends AccessibilityService {
                 }
                 if (actionable) {
                     // Drop empty layout items: clickable containers with nothing to identify them by.
-                    if (!e.label.isEmpty() || e.edit || e.scroll || e.checkable || !e.resId.isEmpty()) out.add(e);
+                    if (!e.label.isEmpty() || e.edit || e.scroll || e.checkable || !e.resId.isEmpty()) { out.add(e); kept = true; }
                 } else if (hasText && !consumed.contains(n)
                         && !(parentLabel.equals(e.text.isEmpty() ? e.desc : e.text))) {
                     out.add(e);
+                    kept = true;
                 }
             }
         }
-        String passLabel = (e.click || e.longClick || e.checkable) && !e.label.isEmpty() ? e.label : parentLabel;
+        String passLabel = kept && !e.label.isEmpty() ? e.label : parentLabel;
         for (int i = 0; i < n.getChildCount(); i++)
             walk(n.getChild(i), depth + 1, out, full, screen, minPx, consumed, pkg, passLabel);
     }
@@ -653,17 +685,53 @@ public class PilotService extends AccessibilityService {
         return gesture(x1, y1, x2, y2, Math.max(ms, 100)) ? "Swiped." : "Swipe failed.";
     }
 
+    /**
+     * Swipes inside the largest scrollable area of the app, and never over the keyboard (a swipe
+     * that starts on a key types it).
+     */
     public String scroll(String direction) {
-        DisplayMetrics dm = realMetrics();
-        int w = dm.widthPixels, h = dm.heightPixels;
-        int cx = w / 2, cy = h / 2;
+        Rect a = scrollArea();
+        int w = a.width(), h = a.height();
+        int cx = a.centerX(), cy = a.centerY();
         switch (direction.toLowerCase(Locale.US)) {
-            case "down":  return swipe(cx, (int) (h * 0.75), cx, (int) (h * 0.30), 350);  // reveal content below
-            case "up":    return swipe(cx, (int) (h * 0.30), cx, (int) (h * 0.75), 350);
-            case "left":  return swipe((int) (w * 0.20), cy, (int) (w * 0.80), cy, 300);
-            case "right": return swipe((int) (w * 0.80), cy, (int) (w * 0.20), cy, 300);
+            case "down":  return swipe(cx, a.top + (int) (h * 0.80), cx, a.top + (int) (h * 0.25), 350);  // reveal content below
+            case "up":    return swipe(cx, a.top + (int) (h * 0.25), cx, a.top + (int) (h * 0.80), 350);
+            case "left":  return swipe(a.left + (int) (w * 0.20), cy, a.left + (int) (w * 0.80), cy, 300);
+            case "right": return swipe(a.left + (int) (w * 0.80), cy, a.left + (int) (w * 0.20), cy, 300);
             default: return "direction must be up, down, left or right";
         }
+    }
+
+    private Rect scrollArea() {
+        DisplayMetrics dm = realMetrics();
+        Rect screen = new Rect(0, (int) (dm.heightPixels * 0.06f), dm.widthPixels, (int) (dm.heightPixels * 0.92f));
+        int keyboardTop = Integer.MAX_VALUE;
+        Rect best = null;
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                Rect wb = new Rect();
+                w.getBoundsInScreen(wb);
+                if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) { keyboardTop = Math.min(keyboardTop, wb.top); continue; }
+                if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+                Rect r = largestScrollable(w.getRoot(), 0);
+                if (r != null && (best == null || r.width() * r.height() > best.width() * best.height())) best = r;
+            }
+        } catch (Exception ignored) { }
+        Rect a = new Rect(best != null && best.width() > 100 && best.height() > 150 ? best : screen);
+        if (!a.intersect(screen)) a.set(screen);
+        if (keyboardTop < a.bottom) a.bottom = Math.max(a.top + 100, keyboardTop - 10);
+        return a;
+    }
+
+    private static Rect largestScrollable(AccessibilityNodeInfo n, int depth) {
+        if (n == null || depth > 40 || !n.isVisibleToUser()) return null;
+        Rect best = null;
+        if (n.isScrollable()) { best = new Rect(); n.getBoundsInScreen(best); }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            Rect r = largestScrollable(n.getChild(i), depth + 1);
+            if (r != null && (best == null || r.width() * r.height() > best.width() * best.height())) best = r;
+        }
+        return best;
     }
 
     private boolean gesture(int x1, int y1, int x2, int y2, int ms) {

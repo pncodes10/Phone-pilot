@@ -178,6 +178,7 @@ public final class DeviceTools {
 
     /** Run one tool. Serialised so the agent and the Wi-Fi bridge never act at the same time. */
     public synchronized Result run(String name, JSONObject in) {
+        actionStart = SystemClock.uptimeMillis();
         try {
             switch (name) {
                 case "get_screen": {
@@ -281,6 +282,8 @@ public final class DeviceTools {
 
     // ------------------------------------------------------------------ helpers
 
+    private long actionStart;
+
     /** A trimmed (or full) screen, plus a labelled screenshot when asked or when the screen is unreadable. */
     private static final class Observed { String text; byte[] jpeg; }
 
@@ -342,7 +345,7 @@ public final class DeviceTools {
      */
     private Result act(JSONObject in, PilotService.Outcome o, boolean settle) {
         String msg = o.msg;
-        if (o.ok && settle) msg += " (UI settled in " + svc.waitForIdle(300, 300, 2500) + " ms)";
+        if (o.ok && settle) msg += " (UI settled in " + svc.settleAfter(actionStart) + " ms)";
         if (!in.optBoolean("observe", true)) return new Result(msg, null, !o.ok);
         Observed v = view(false, "auto");
         return new Result((o.ok ? "ok: " : "error: ") + msg + "\n\nscreen:\n" + v.text, v.jpeg, !o.ok);
