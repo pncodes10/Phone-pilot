@@ -179,6 +179,8 @@ MAIN_PARAM = {
     "scroll": ("direction", True), "press_button": ("button", True), "wait": ("seconds", False),
     "wait_for": ("text", True), "wait_gone": ("text", True), "list_apps": ("filter", True),
 }
+# Tools whose bare values fill several parameters in order: "tap 540 1820".
+POSITIONAL = {"tap": ("x", "y"), "long_press": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2")}
 TEXT_KEYS = {"text", "res_id", "app", "url", "direction", "button", "filter", "labels"}
 
 
@@ -205,6 +207,10 @@ def parse_args_text(tool: str, parts: list[str]):
             args[m.group(1)] = _value(m.group(1), m.group(2))
         else:
             bare.append(p)
+    if bare and tool in POSITIONAL:
+        for key, raw in zip(POSITIONAL[tool], bare):
+            args.setdefault(key, _value(key, raw))
+        bare = bare[len(POSITIONAL[tool]):]
     if bare:
         if tool not in MAIN_PARAM:
             raise SystemExit(f"{tool} takes key=value arguments, not {' '.join(bare)!r}")
