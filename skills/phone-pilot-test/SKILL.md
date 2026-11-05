@@ -7,7 +7,7 @@ description: "Drive pranesh's Android phone through the Phone Pilot app (Wi-Fi b
 
 Phone Pilot is an Accessibility Service app on the user's Android phone (Samsung S23 FE, 1080x2340). Its Wi-Fi bridge (port 8765, Bearer token) is exposed to the internet by a Cloudflare quick tunnel running in Termux. You control the phone with `phonectl.py`, one command per call, about 0.6-2 s each.
 
-Source: https://github.com/pncodes10/phone-pilot (also in /mnt/project-files/phone-control/). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.7.3+**; with an older app the new tools answer "Unknown tool" (see section 7).
+Source: https://github.com/pncodes10/phone-pilot (also in /mnt/project-files/phone-control/). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.7.3+**; with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
 
 ## 0. Tell the user the process first
 
@@ -42,10 +42,10 @@ Error meanings: `401` = wrong/changed token. `502 Bad Gateway` = tunnel up but t
 `get_screen` returns a short numbered list, one item per line:
 
 ```
-Screen #12  app=com.storageplanner  size=1080x2340
+Screen #12  app=com.example.notes  size=1080x2340
 Keyboard open from y=1332 (type_text doesn't need it; press back to hide it)
 [5] Button "Save" (id=save_btn) @540,1820 [click]
-[6] EditText "75" desc="Target used space in gigabytes" @540,1521 [click,long,edit,focused]
+[6] EditText "" hint="Title" (id=title) @540,1521 [click,long,edit,focused]
 ```
 
 - The header's `app=` is the foreground app. **Check it before acting**; if it is not the app under test (e.g. `com.anthropic.claude`), stop and tell the user (section 4).
@@ -71,7 +71,7 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 | `scroll down` | Swipes inside the app's largest scrollable area, above the keyboard. |
 | `tap 540 1820`, `long_press 540 1820`, `swipe 100 1800 100 600` | Gestures in real pixels |
 | `press_button back` (home, recents, notifications) | System buttons |
-| `launch_app com.storageplanner` / `launch_app Settings` | Open an app; waits until it is in front |
+| `launch_app com.example.notes` / `launch_app Settings` | Open an app; waits until it is in front |
 | `screenshot --out file.jpg` (then Read the jpg) | Visual check. `labels=true` draws the numbered boxes. Multiply image coords by the printed factor for taps. |
 | `list_apps`, `open_url`, `wait seconds=1` | Misc. Prefer `wait_for` over fixed `wait`. |
 | `batch '[["tap_id",{"id":5}],["type_text",{"text":"hi"}]]'` | Several steps in one round trip, stops at the first error |
@@ -89,19 +89,19 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 `phonectl.py run test.yaml` runs a YAML step file with no Claude involvement and prints PASS/FAIL with the time for each step. It stops at the first failure (`--keep-going` to continue), saves the failing step's screenshot and screen text next to the script (`--out-dir` to change), and exits 1 on failure.
 
 ```yaml
-app: com.storageplanner
+app: com.example.notes
 timeout: 4          # seconds each assert_visible / assert_gone may wait (default 3)
 steps:
   - launch
-  - assert_visible: "Storage Planner"
-  - type: {text: "80", into: "Target used space in gigabytes"}
+  - wait_gone: "Loading"
+  - tap: "New note"
+  - type: {text: "Shopping", into: "Title"}
   - back                         # hide the keyboard before tapping things under it
-  - tap: "Algorithm Lab (debug)"
-  - assert_visible: "Pick pictures"
-  - back
+  - tap: "Save"
+  - assert_visible: "Shopping"
 ```
 
-Steps: `launch`, `tap: "text"` / `tap: {text, id, exact}` / `tap: [x, y]`, `tap_id: 5`, `type: "text"` / `type: {text, into, submit}`, `assert_visible`, `assert_gone`, `wait_for`, `wait_gone`, `back`, `home`, `press: back`, `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]`, `wait: 1.5`, `open_url`, `screenshot`. The repo's `examples/storage-planner.yaml` passes all 13 steps in about 19 s.
+Steps: `launch`, `tap: "text"` / `tap: {text, id, exact}` / `tap: [x, y]`, `tap_id: 5`, `type: "text"` / `type: {text, into, submit}`, `assert_visible`, `assert_gone`, `wait_for`, `wait_gone`, `back`, `home`, `press: back`, `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]`, `wait: 1.5`, `open_url`, `screenshot`.
 
 Write a script whenever a flow will be repeated (regression checks, before/after comparisons). Use plain commands for exploring a new screen.
 
@@ -113,37 +113,21 @@ When asked to time steps:
 - Use `observe=false` / `labels=false` for steps whose screen you don't need, so you time the app, not screenshots.
 - For long work in the app (a button greys out while it runs), tap it, then poll `get_screen labels=false` about every 0.5 s until the button is enabled again (no `disabled` flag), and report the time since the tap. Also quote the app's own reported duration if its log has one.
 - Report a table: step, time, result. Say which part is the app and which is the tunnel and settle overhead (each Phone Pilot call costs about 0.6-1 s through the tunnel).
-- Measured baseline (open Storage Planner → Algorithm Lab → Back, checking each screen): old style (fixed waits and full screen reads) 14.5 s, 10 calls; new style 6.3 s, 5 calls.
+- For reference: a three-screen flow with checks took 6.3 s and 5 calls the new way (actions return the screen, `wait_for`), against 14.5 s and 10 calls with fixed waits and a full `get_screen` after each action.
 
 ## 6. Known pitfalls
 
 - **The user watching on the phone.** If `app=` shows `com.anthropic.claude` (or anything other than the app under test and its pickers), stop immediately. Don't tap: `tap_text` searches every window and can hit buttons in the user's chat. Tell the user what happened and ask them to watch from another device.
+- **Long-running work in an app.** Buttons often show `disabled` while it runs; poll until they're enabled (section 5). Results shown in one long text block need `get_text`, after scrolling it onto the screen.
 - **Leftover keyboard.** A field focused in an earlier run keeps the keyboard open, which hides buttons near the bottom (the header shows `Keyboard open from y=...`). `press_button back` hides it. `press_button back` on an app's root screen exits the app.
-- **The relaunch resets the app.** `launch_app` can bring an app back on its main screen, losing in-app state (e.g. an Algorithm Lab log). Read logs before switching away.
+- **The relaunch resets the app.** `launch_app` can bring an app back on its main screen, losing in-app state such as a log on screen. Read logs with `get_text` before switching away.
 - **System file picker (`com.google.android.documentsui`).** It ignores automated taps and accessibility clicks on files (seen on Android 11-15 by other automation tools too; Edge panels off didn't help). Taps there also stall for about 15 s and can cause a 502. Its search and toolbar work. Ask the user to tap the file themselves, from another device's chat, then continue.
 - `type_text` with `submit=true` (IME Enter) can hang about 30 s in some fields (seen in the file picker search). Type without submit, then tap the result or the app's button.
 - Never type passwords, PINs, or sign in to accounts for the user; never send messages or make purchases.
 - Agents can't install an APK: Android always asks the user to tap Install. Give them the APK and ask them to install it.
 - Phone Pilot keeps the screen on for 3 minutes after each command (removed automatically in the file picker). It can't stop the power button.
 
-## 7. Storage Planner (`com.storageplanner`)
-
-- Main screen: target field (`desc="Target used space in gigabytes"`, a number keyboard), two checkboxes, **Analyse my storage**, **Cancel**, and **Algorithm Lab (debug)** at the bottom (hidden while the keyboard is open). Don't tap **Analyse my storage** unless asked.
-- Algorithm Lab: **Pick pictures**, **Clear**, the picked picture, **Treat as: Camera photo**, then (scroll down) "Run on the selected picture": Run everything, Face detection, Faces: other sizes and tilts, Eyes open or closed, Sharpness / blur, Lighting, Picture category, QR code / barcode, Read text, **Compress (test copy)**; "Run on all picked pictures": Best shot among them, Near-duplicate check, Exact duplicate check.
-- While a test runs, all those buttons show `disabled`. Compress (test copy) takes about 19-23 s and writes a copy to `Download/StoragePlanner/compressed/<name>-<time>/`.
-- The result log is one long TextView below the buttons, starting `Compress <file> ...`. Scroll down until it is on screen, then `get_text text="Compress 2026"` (adjust to the file name) and save the output to a file for the user.
-- Seen in testing: **Pick pictures** sometimes returns at once with the newest picture already chosen (often the previous test copy, e.g. `...-tiles-hw-tiles-hw.heic`) without showing the picker. Check the "1 of 1: <name>" line before running a test, and tell the user if it isn't the picture they meant.
-
-## 8. Report
+## 7. Report
 
 For each test, say what you did, what the screen showed (quote on-screen text, attach or describe screenshots), the time per step when asked, and anything that failed, with the exact error. Distinguish app bugs from Phone Pilot or connection problems. Save long logs to a file and send it.
 
-## 9. Changing Phone Pilot itself
-
-Edit `android-app/` and rebuild with `bash android-app/build_apk.sh`:
-- Tools: `apt-get install -y --no-install-recommends aapt dalvik-exchange zipalign apksigner` (works in the cloud container after `apt-get update`), a JDK, and `ANDROID_JAR` pointing at an API 34 android.jar (`curl -L -o android.jar https://raw.githubusercontent.com/Sable/android-platforms/master/android-34/android.jar`; API 30 lacks constants the code uses).
-- Quick compile check without building: `javac -source 8 -target 8 -bootclasspath $ANDROID_JAR -d /tmp/cls $(find android-app/app/src/main/java -name '*.java')`.
-- Sign with `KEYSTORE=/mnt/project-files/phone-control/android-app/phonepilot-debug.keystore` (password `android`) so it installs as an update; it is intentionally not in the repo. Builds from 0.7 on use the new key (certificate SHA-256 `699d419c…658b55`); 0.6 and older used a lost key.
-- Bump `versionCode`/`versionName` in `build_apk.sh` and `app/build.gradle`. Copy the APK to the repo root and `git add -f PhonePilot.apk` (`*.apk` is gitignored).
-- Reinstalling stops the bridge and may change its token. Tell the user to restart the bridge, and keep the tunnel running.
-- Check new behaviour on the phone before calling it done: compile success says nothing about accessibility timing, window layering or Samsung-specific windows.
