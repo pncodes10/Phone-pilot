@@ -79,10 +79,12 @@ public final class DeviceTools {
                     observe(props("url", "string", "URL or deep link")), "url"));
             t.put(tool("wait_for",
                     "Wait until an item with this text (or res_id) is on screen, checking every 300 ms. Reports "
-                    + "found or timed out and how long it took. Use it instead of fixed waits.",
+                    + "found or timed out and how long it took. Use it instead of fixed waits. enabled=true waits "
+                    + "for the item to be enabled too, e.g. a button that greys out while the app works.",
                     observe(props("text", "string", "Text to wait for (contains, unless exact)",
                                   "res_id", "string", "Resource id to wait for",
                                   "exact", "boolean", "Whole text must match",
+                                  "enabled", "boolean", "Only count it when enabled (true) or disabled (false)",
                                   "timeout", "number", "Seconds, default 5, max 60"))));
             t.put(tool("wait_gone",
                     "Wait until no item with this text (or res_id) is on screen, e.g. a \"Loading\" message. "
@@ -91,6 +93,14 @@ public final class DeviceTools {
                                   "res_id", "string", "Resource id that should disappear",
                                   "exact", "boolean", "Whole text must match",
                                   "timeout", "number", "Seconds, default 5, max 60"))));
+            t.put(tool("scroll_to",
+                    "Scroll until an item with this text (or res_id) is on screen, up to max swipes; stops early "
+                    + "at the end of the list. One call instead of scroll-and-look loops.",
+                    observe(props("text", "string", "Text to bring on screen (contains, unless exact)",
+                                  "res_id", "string", "Resource id",
+                                  "exact", "boolean", "Whole text must match",
+                                  "direction", "string", "down (default) or up",
+                                  "max", "integer", "Most swipes, default 10"))));
             t.put(tool("get_text",
                     "Full, uncut text of one item (the screen list shortens long text), e.g. a log. Pass id "
                     + "(item number), or text / res_id to find it.",
@@ -202,9 +212,27 @@ public final class DeviceTools {
         boolean show = !name.equals("ask_user") && !name.equals("status");
         String what = show ? describeAction(name, in) : "";
         if (show) svc.panel.setAction("▶ " + what);
-        Result r = runInner(name, in);
+        Result r = wrongApp(name, in);
+        if (r == null) r = runInner(name, in);
         if (show) svc.panel.setAction((r.isError ? "✗ " : "✓ ") + what);
         return r;
+    }
+
+    private static final java.util.Set<String> ACTIONS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "tap_id", "tap_element", "tap_text", "tap", "long_press", "swipe", "scroll", "scroll_to", "type_text",
+            "press_button"));
+
+    /**
+     * in_app="com.a,com.b": refuse an action (nothing done) when another app is in front, e.g. the
+     * user switched to their chat. Returns null when it is fine to go ahead.
+     */
+    private Result wrongApp(String name, JSONObject in) {
+        String want = in.optString("in_app", "").trim();
+        if (want.isEmpty() || !ACTIONS.contains(name)) return null;
+        String fg = svc.activePackage();
+        for (String w : want.split(",")) if (w.trim().equals(fg)) return null;
+        return act(in, PilotService.Outcome.fail("The app in front is " + (fg.isEmpty() ? "unknown" : fg)
+                + ", not " + want + ". Nothing was done; ask the user to go back to the app (ask_user)."), false);
     }
 
     /** What the status strip says while a command runs. */
@@ -228,6 +256,7 @@ public final class DeviceTools {
             case "wait_for": return "Waiting for \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\"";
             case "wait_gone": return "Waiting for \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\" to go";
             case "get_text": return "Reading text";
+            case "scroll_to": return "Scrolling to \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\"";
             case "batch": {
                 JSONArray st = in.optJSONArray("steps");
                 return "Running " + (st == null ? 0 : st.length()) + " steps";
@@ -321,6 +350,8 @@ public final class DeviceTools {
                     return waitFor(in, false);
                 case "wait_gone":
                     return waitFor(in, true);
+                case "scroll_to":
+                    return scrollTo(in);
                 case "batch": {
                     // Several actions in one round trip; stops at the first error. The new screen is
                     // returned once at the end (observe=false or the old screen=false turns that off).
@@ -335,6 +366,7 @@ public final class DeviceTools {
                         JSONObject a = st.optJSONObject("input");
                         a = a == null ? new JSONObject() : new JSONObject(a.toString());
                         a.put("observe", false);
+                        if (in.has("in_app") && !a.has("in_app")) a.put("in_app", in.getString("in_app"));
                         Result r = run(n, a);
                         log.append(i + 1).append(". ").append(n).append(": ").append(r.text).append("\n");
                         if (r.jpeg != null) img = r.jpeg;
@@ -484,19 +516,21 @@ public final class DeviceTools {
         String rid = in.optString("res_id", "").trim();
         if (text.isEmpty() && rid.isEmpty()) return err("Pass text or res_id.");
         boolean exact = in.optBoolean("exact", false);
+        Boolean enabled = in.has("enabled") ? in.optBoolean("enabled") : null;
         double secs = Math.min(60, Math.max(0, in.optDouble("timeout", 5)));
-        String what = (text.isEmpty() ? "" : "\"" + text + "\"") + (rid.isEmpty() ? "" : " (id=" + rid + ")");
+        String what = (text.isEmpty() ? "" : "\"" + text + "\"") + (rid.isEmpty() ? "" : " (id=" + rid + ")")
+                + (enabled == null ? "" : enabled ? " (enabled)" : " (disabled)");
         what = what.trim();
         long start = SystemClock.uptimeMillis();
         long deadline = start + (long) (secs * 1000);
         boolean hit;
         long now;
         while (true) {
-            boolean present = !svc.findNodes(text, rid, exact).isEmpty();
+            boolean present = present(text, rid, exact, enabled);
             if (gone && !present) {
                 // Screens are briefly empty during transitions; make sure it is really gone.
                 PilotService.sleep(150);
-                present = !svc.findNodes(text, rid, exact).isEmpty();
+                present = present(text, rid, exact, enabled);
             }
             hit = gone != present;
             now = SystemClock.uptimeMillis();
@@ -508,6 +542,37 @@ public final class DeviceTools {
                 ? (gone ? what + " is gone after " : "Found " + what + " after ") + took + " ms."
                 : "Timed out after " + took + " ms: " + what + (gone ? " is still on screen." : " did not appear.");
         return act(in, hit ? PilotService.Outcome.ok(msg) : PilotService.Outcome.fail(msg), false);
+    }
+
+    private boolean present(String text, String rid, boolean exact, Boolean enabled) {
+        for (android.view.accessibility.AccessibilityNodeInfo n : svc.findNodes(text, rid, exact))
+            if (enabled == null || n.isEnabled() == enabled) return true;
+        return false;
+    }
+
+    /** scroll_to: swipe until the item is on screen, the list stops moving, or max swipes. */
+    private Result scrollTo(JSONObject in) {
+        String text = in.optString("text", "").trim();
+        String rid = in.optString("res_id", "").trim();
+        if (text.isEmpty() && rid.isEmpty()) return err("Pass text or res_id.");
+        boolean exact = in.optBoolean("exact", false);
+        String dir = in.optString("direction", "down");
+        int max = Math.max(0, Math.min(30, in.optInt("max", 10)));
+        String what = (text.isEmpty() ? "" : "\"" + text + "\"") + (rid.isEmpty() ? "" : " (id=" + rid + ")");
+        String last = null;
+        for (int i = 0; ; i++) {
+            if (present(text, rid, exact, null))
+                return act(in, PilotService.Outcome.ok("Found " + what.trim() + " after " + i + " swipe" + (i == 1 ? "" : "s") + "."), false);
+            String sig = svc.readScreen(false).text;
+            sig = sig.substring(sig.indexOf('\n') + 1);     // drop the "Screen #n" header
+            if (i >= max) return act(in, PilotService.Outcome.fail(what.trim() + " not found after " + i + " swipes."), false);
+            if (sig.equals(last)) return act(in, PilotService.Outcome.fail(what.trim()
+                    + " not found: reached the end of the list after " + i + " swipes."), false);
+            last = sig;
+            String r = svc.scroll(dir);
+            if (!r.startsWith("Swiped")) return act(in, PilotService.Outcome.fail(r), false);
+            svc.waitForIdle(300, 300, 1500);
+        }
     }
 
     private static Result ok(String s) { return new Result(s, null, false); }

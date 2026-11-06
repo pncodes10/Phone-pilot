@@ -177,7 +177,7 @@ MAIN_PARAM = {
     "tap_id": ("id", False), "get_text": ("id", False), "ask_user": ("message", True), "status": ("text", True), "tap_element": ("index", False), "tap_text": ("text", True),
     "type_text": ("text", True), "launch_app": ("app", True), "open_url": ("url", True),
     "scroll": ("direction", True), "press_button": ("button", True), "wait": ("seconds", False),
-    "wait_for": ("text", True), "wait_gone": ("text", True), "list_apps": ("filter", True),
+    "wait_for": ("text", True), "scroll_to": ("text", True), "wait_gone": ("text", True), "list_apps": ("filter", True),
 }
 # Tools whose bare values fill several parameters in order: "tap 540 1820".
 POSITIONAL = {"tap": ("x", "y"), "long_press": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2")}
@@ -561,6 +561,10 @@ def main() -> None:
             args = {"steps": [{"name": tool, "input": args}]}
             tool = "batch"
         args["screen"] = True
+    # PHONE_APP=com.example.app (comma-separated for pickers) guards every action: the phone refuses
+    # to tap or type when another app is in front, e.g. the user opened their chat.
+    if os.environ.get("PHONE_APP") and isinstance(args, dict) and "in_app" not in args:
+        args["in_app"] = os.environ["PHONE_APP"]
     res = send(pairing, tool, args, a.timeout)
     if tool == "batch" and res.get("is_error") and "Unknown tool batch" in json.dumps(res):
         # Older Phone Pilot: run the steps one by one.
