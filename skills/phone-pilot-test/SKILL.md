@@ -7,7 +7,7 @@ description: "Drive pranesh's Android phone through the Phone Pilot app (Wi-Fi b
 
 Phone Pilot is an Accessibility Service app on the user's Android phone (Samsung S23 FE, 1080x2340). Its Wi-Fi bridge (port 8765, Bearer token) is exposed to the internet by a Cloudflare quick tunnel running in Termux. You control the phone with `phonectl.py`, one command per call, about 0.6-2 s each.
 
-Source: https://github.com/pncodes10/phone-pilot (also in /mnt/project-files/phone-control/). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.8+**; with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
+Source: https://github.com/pncodes10/phone-pilot (also in /mnt/project-files/phone-control/). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.9+**; with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
 
 ## 0. Tell the user the process first
 
@@ -16,7 +16,7 @@ Before you start (and whenever you don't yet have a working address and token), 
 Each time you want something tested:
 1. On the phone, start Phone Pilot's Wi-Fi bridge and run the `cloudflared` command in Termux: `cloudflared tunnel --url http://localhost:8765`
 2. In any thread, give the agent the tunnel address and token, and say what to test.
-3. **Follow the chat from another device (laptop or tablet), not the phone.** Leave the phone unlocked, on the app being tested, and untouched while it works. Opening the Claude app on the phone moves the foreground app under the agent, and its taps land in the chat instead. The strip at the top left of the phone shows what the agent is doing, and when it needs you, the phone rings and vibrates and shows an orange "Claude needs you" card: do what it says, then tap **Done**.
+3. **Follow the chat from another device (laptop or tablet), not the phone.** Leave the phone unlocked, on the app being tested, and untouched while it works. Opening the Claude app on the phone moves the foreground app under the agent, and its taps land in the chat instead. The strip at the top left of the phone shows what the agent is doing, and when it needs you, the phone rings like an alarm and shows an orange "Claude needs you" card: do what it says, then tap **Done**.
 
 Then wait for the address and token before sending any command. If the user already gave them in this conversation, skip straight to connecting. The user may call the token "phone password".
 
@@ -73,7 +73,7 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 | `press_button back` (home, recents, notifications) | System buttons |
 | `launch_app com.example.notes` / `launch_app Settings` | Open an app; waits until it is in front |
 | `screenshot --out file.jpg` (then Read the jpg) | Visual check. `labels=true` draws the numbered boxes. Multiply image coords by the printed factor for taps. |
-| `ask_user "Please pick a photo in the picker" wait=60` | **Ask the person for help** (pick a file, unlock, sign in, confirm by eye). Rings and vibrates (`alert=vibrate` or `alert=none` to be quieter), shows an orange card with **Done** and a notification with **Done** (works on the lock screen and in system screens). `wait=N` (max 80) blocks until Done; `ask_user wait=60` keeps waiting; `ask_user clear=true` withdraws it. |
+| `ask_user "Please pick a photo in the picker" wait=60` | **Ask the person for help** (pick a file, unlock, sign in, confirm by eye). Rings like an alarm until Done (alarm tone and vibration, even on silent; at most `ring=30` s). `alert=sound` (one notification sound), `alert=vibrate` or `alert=none` are quieter: use them for low-priority notes. It shows an orange card with **Done** and a notification with **Done** (works on the lock screen and in system screens). `wait=N` (max 80) blocks until Done; `ask_user wait=60` keeps waiting; `ask_user clear=true` withdraws it. |
 | `status "Login test 3/8"` | Task line shown on the phone above the current action. Set it at the start of each test. |
 | `list_apps`, `open_url`, `wait seconds=1` | Misc. Prefer `wait_for` over fixed `wait`. |
 | `batch '[["tap_id",{"id":5}],["type_text",{"text":"hi"}]]'` | Several steps in one round trip, stops at the first error |

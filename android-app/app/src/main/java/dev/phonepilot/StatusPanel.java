@@ -11,7 +11,9 @@ import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.os.Build;
@@ -79,14 +81,19 @@ final class StatusPanel {
         touch();
     }
 
-    /** Show a request to the user; returns its id. alert: sound, vibrate or none. */
-    long ask(String message, String alert) {
+    /**
+     * Show a request to the user; returns its id. alert: alarm (looping alarm tone and vibration
+     * until Done, at most ringSeconds), sound (one notification sound), vibrate or none.
+     */
+    long ask(String message, String alert, int ringSeconds) {
         synchronized (askLock) {
             askId++;
             askMessage = message;
             askStart = SystemClock.uptimeMillis();
         }
+        stopAlarm();
         notifyUser(message, alert);
+        if ("alarm".equals(alert)) startAlarm(ringSeconds);
         touch();
         return askId;
     }
@@ -111,6 +118,7 @@ final class StatusPanel {
     /** Remove the request (card and notification) without it counting as answered. */
     void clearAsk() {
         askMessage = null;
+        stopAlarm();
         cancelNotification();
         refresh();
     }
@@ -166,6 +174,7 @@ final class StatusPanel {
             askLock.notifyAll();
         }
         Log.add("The user tapped Done.");
+        stopAlarm();
         cancelNotification();
         refresh();
     }
@@ -324,8 +333,9 @@ final class StatusPanel {
         LinearLayout texts = new LinearLayout(svc);
         texts.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(svc);
-        title.setText("Claude needs you");
+        title.setText("Claude needs you · tap Done to stop the alert");
         title.setMaxLines(1);
+        title.setEllipsize(TextUtils.TruncateAt.END);
         title.setTextColor(Color.WHITE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         title.setAlpha(0.85f);
@@ -376,7 +386,9 @@ final class StatusPanel {
 
     private void notifyUser(String message, String alert) {
         NotificationManager nm = (NotificationManager) svc.getSystemService(Context.NOTIFICATION_SERVICE);
-        String channel = "none".equals(alert) ? "ask_silent" : "vibrate".equals(alert) ? "ask_vibrate" : "ask_sound";
+        // alarm: the notification itself stays quiet, startAlarm() rings and vibrates.
+        String channel = "none".equals(alert) ? "ask_silent" : "vibrate".equals(alert) ? "ask_vibrate"
+                : "sound".equals(alert) ? "ask_sound" : "ask_alarm";
         ensureChannels(nm);
         boolean posted = false;
         if (nm.areNotificationsEnabled()) {
@@ -405,13 +417,81 @@ final class StatusPanel {
         }
         if (!posted) {
             // No notification permission: ring and vibrate directly.
-            if ("sound".equals(alert) || alert == null) {
+            if ("sound".equals(alert)) {
                 try {
                     Ringtone r = RingtoneManager.getRingtone(svc, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
                     if (r != null) r.play();
                 } catch (Exception ignored) { }
             }
-            if (!"none".equals(alert)) vibrate();
+            if ("sound".equals(alert) || "vibrate".equals(alert)) vibrate();
+        }
+    }
+
+    // ------------------------------------------------------------------ alarm
+
+    private Ringtone ringing;
+    private int savedAlarmVolume = -1;
+
+    private final Runnable alarmTimeout = new Runnable() {
+        @Override public void run() { stopAlarm(); }
+    };
+
+    /** Loop the alarm tone on the alarm stream (rings on silent and vibrate) and vibrate, until Done. */
+    @SuppressWarnings("deprecation")
+    private synchronized void startAlarm(int seconds) {
+        AudioManager am = (AudioManager) svc.getSystemService(Context.AUDIO_SERVICE);
+        try {
+            int max = am.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+            int cur = am.getStreamVolume(AudioManager.STREAM_ALARM);
+            int want = Math.round(max * 0.8f);
+            if (cur < want) {
+                am.setStreamVolume(AudioManager.STREAM_ALARM, want, 0);
+                savedAlarmVolume = cur;
+            }
+        } catch (Exception e) {
+            Log.add("Could not raise the alarm volume: " + e);
+        }
+        try {
+            Uri uri = RingtoneManager.getActualDefaultRingtoneUri(svc, RingtoneManager.TYPE_ALARM);
+            if (uri == null) uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+            Ringtone r = RingtoneManager.getRingtone(svc, uri);
+            if (r == null) r = RingtoneManager.getRingtone(svc, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE));
+            if (r != null) {
+                r.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+                r.setLooping(true);
+                r.play();
+                ringing = r;
+            }
+        } catch (Exception e) {
+            Log.add("Could not play the alarm: " + e);
+        }
+        try {
+            Vibrator v = (Vibrator) svc.getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null) v.vibrate(VibrationEffect.createWaveform(new long[]{0, 600, 400, 600, 400, 1000, 800}, 0),
+                    new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build());
+        } catch (Exception ignored) { }
+        main.removeCallbacks(alarmTimeout);
+        main.postDelayed(alarmTimeout, Math.max(3, Math.min(120, seconds)) * 1000L);
+    }
+
+    private synchronized void stopAlarm() {
+        main.removeCallbacks(alarmTimeout);
+        if (ringing != null) {
+            try { ringing.stop(); } catch (Exception ignored) { }
+            ringing = null;
+        }
+        try {
+            Vibrator v = (Vibrator) svc.getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null) v.cancel();
+        } catch (Exception ignored) { }
+        if (savedAlarmVolume >= 0) {
+            try {
+                ((AudioManager) svc.getSystemService(Context.AUDIO_SERVICE))
+                        .setStreamVolume(AudioManager.STREAM_ALARM, savedAlarmVolume, 0);
+            } catch (Exception ignored) { }
+            savedAlarmVolume = -1;
         }
     }
 
@@ -424,6 +504,13 @@ final class StatusPanel {
     }
 
     private void ensureChannels(NotificationManager nm) {
+        if (nm.getNotificationChannel("ask_alarm") == null) {
+            NotificationChannel alarm = new NotificationChannel("ask_alarm", "Claude needs you (alarm)", NotificationManager.IMPORTANCE_HIGH);
+            alarm.setSound(null, null);          // Phone Pilot plays the alarm tone itself
+            alarm.enableVibration(false);
+            alarm.setBypassDnd(true);
+            nm.createNotificationChannel(alarm);
+        }
         if (nm.getNotificationChannel("ask_sound") != null) return;
         AudioAttributes aa = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)

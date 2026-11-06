@@ -98,11 +98,13 @@ public final class DeviceTools {
                           "res_id", "string", "Resource id")));
             t.put(tool("ask_user",
                     "Ask the person holding the phone to do something you can't (pick a file, unlock, sign "
-                    + "in, check something by eye). Shows an orange card with a Done button and a notification "
-                    + "that rings and vibrates. wait=N blocks up to N seconds (max 80) for Done; call again "
-                    + "with only wait to keep waiting, or clear=true to withdraw the request.",
+                    + "in, check something by eye). Shows an orange card with a Done button and a notification, "
+                    + "and by default rings like an alarm (alarm tone and vibration, even on silent) until Done "
+                    + "or ring seconds. wait=N blocks up to N seconds (max 80) for Done; call again with only "
+                    + "wait to keep waiting, or clear=true to withdraw the request.",
                     props("message", "string", "What you need, in plain words",
-                          "alert", "string", "sound (default), vibrate or none",
+                          "alert", "string", "alarm (default), sound (one notification sound), vibrate or none",
+                          "ring", "number", "Seconds the alarm rings at most (default 30, max 120)",
                           "wait", "number", "Seconds to wait for Done (0-80, default 0)",
                           "clear", "boolean", "Withdraw the current request")));
             t.put(tool("status",
@@ -441,7 +443,7 @@ public final class DeviceTools {
         }
         String msg = in.optString("message", "").trim();
         if (!msg.isEmpty()) {
-            p.ask(msg, in.optString("alert", "sound").toLowerCase(java.util.Locale.US));
+            p.ask(msg, in.optString("alert", "alarm").toLowerCase(java.util.Locale.US), in.optInt("ring", 30));
             Log.add("Asked the user: " + msg);
         } else if (!p.asking() && !p.answered()) {
             return err("No request is open. Pass message.");
@@ -451,7 +453,7 @@ public final class DeviceTools {
         if (p.answered()) return ok("The user tapped Done (" + (p.askAgeMs() / 1000) + " s after the request).");
         if (secs > 0) return ok("No answer yet after " + (long) secs + " s; the request is still showing. "
                 + "Call ask_user wait=N again to keep waiting.");
-        return ok("Request shown on the phone with " + in.optString("alert", "sound") + ". Call ask_user wait=N "
+        return ok("Request shown on the phone with " + in.optString("alert", "alarm") + ". Call ask_user wait=N "
                 + "to wait for Done, or check the screen.");
     }
 
