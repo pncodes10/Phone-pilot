@@ -197,7 +197,7 @@ def parse_args_text(tool: str, parts: list[str]):
     """JSON, or key=value tokens plus at most one bare value for the tool's main parameter."""
     if not parts:
         return {}
-    if len(parts) == 1 and parts[0].lstrip()[:1] in "{[":
+    if len(parts) == 1 and parts[0].lstrip()[:1] in ("{", "["):
         return json.loads(parts[0])
     args: dict = {}
     bare: list[str] = []
