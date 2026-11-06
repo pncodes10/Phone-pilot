@@ -199,9 +199,9 @@ public final class DeviceTools {
         actionStart = SystemClock.uptimeMillis();
         boolean show = !name.equals("ask_user") && !name.equals("status");
         String what = show ? describeAction(name, in) : "";
-        if (show) svc.panel.setAction(what + "…");
+        if (show) svc.panel.setAction("▶ " + what);
         Result r = runInner(name, in);
-        if (show) svc.panel.setAction(what + (r.isError ? "  ✗" : "  ✓"));
+        if (show) svc.panel.setAction((r.isError ? "✗ " : "✓ ") + what);
         return r;
     }
 
@@ -221,7 +221,7 @@ public final class DeviceTools {
             case "type_text": return "Typing \"" + text + "\"";
             case "press_button": return "Pressing " + in.optString("button", "");
             case "list_apps": return "Listing apps";
-            case "launch_app": return "Opening " + in.optString("app", "");
+            case "launch_app": return "Opening " + appLabel(in.optString("app", ""));
             case "open_url": return "Opening a link";
             case "wait_for": return "Waiting for \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\"";
             case "wait_gone": return "Waiting for \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\" to go";
@@ -232,6 +232,15 @@ public final class DeviceTools {
             }
             case "wait": return "Waiting " + in.optDouble("seconds", 1) + " s";
             default: return name;
+        }
+    }
+
+    private String appLabel(String app) {
+        try {
+            android.content.pm.PackageManager pm = svc.getPackageManager();
+            return pm.getApplicationLabel(pm.getApplicationInfo(app, 0)).toString();
+        } catch (Exception e) {
+            return app;
         }
     }
 

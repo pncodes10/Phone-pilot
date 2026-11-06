@@ -192,7 +192,7 @@ final class StatusPanel {
                 ensureBar();
                 taskView.setText(task);
                 taskView.setVisibility(task.isEmpty() ? View.GONE : View.VISIBLE);
-                actionView.setText(action.isEmpty() ? "Claude is controlling this phone" : "Claude: " + action);
+                actionView.setText(action.isEmpty() ? "Claude is controlling this phone" : action);
             } else {
                 removeView(bar);
                 bar = null;
@@ -325,6 +325,7 @@ final class StatusPanel {
         texts.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(svc);
         title.setText("Claude needs you");
+        title.setMaxLines(1);
         title.setTextColor(Color.WHITE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         title.setAlpha(0.85f);
@@ -356,10 +357,11 @@ final class StatusPanel {
         dlp.leftMargin = dp(10);
         box.addView(done, dlp);
 
-        cardLp = params(WindowManager.LayoutParams.MATCH_PARENT);
-        cardLp.gravity = Gravity.TOP;
+        int margin = dp(10);
+        cardLp = params(svc.realMetrics().widthPixels - 2 * margin);
+        cardLp.gravity = Gravity.TOP | Gravity.START;
+        cardLp.x = margin;
         cardLp.y = statusBarHeight() + dp(6);
-        cardLp.horizontalMargin = 0.03f;
         if (passThrough) cardLp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         try { wm().addView(box, cardLp); card = box; }
         catch (Exception e) { Log.add("Request card failed: " + e); }
