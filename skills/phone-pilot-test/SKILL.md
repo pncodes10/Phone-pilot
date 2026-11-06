@@ -7,7 +7,7 @@ description: "Drive pranesh's Android phone through the Phone Pilot app (Wi-Fi b
 
 Phone Pilot is an Accessibility Service app on the user's Android phone (Samsung S23 FE, 1080x2340). Its Wi-Fi bridge (port 8765, Bearer token) is exposed to the internet by a Cloudflare quick tunnel running in Termux. You control the phone with `phonectl.py`, one command per call, about 0.6-2 s each.
 
-Source: https://github.com/pncodes10/phone-pilot (also in /mnt/project-files/phone-control/). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.7.3+**; with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
+Source: https://github.com/pncodes10/phone-pilot (also in /mnt/project-files/phone-control/). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.8+**; with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
 
 ## 0. Tell the user the process first
 
@@ -16,7 +16,7 @@ Before you start (and whenever you don't yet have a working address and token), 
 Each time you want something tested:
 1. On the phone, start Phone Pilot's Wi-Fi bridge and run the `cloudflared` command in Termux: `cloudflared tunnel --url http://localhost:8765`
 2. In any thread, give the agent the tunnel address and token, and say what to test.
-3. **Follow the chat from another device (laptop or tablet), not the phone.** Leave the phone unlocked, on the app being tested, and untouched while it works. Opening the Claude app on the phone moves the foreground app under the agent, and its taps land in the chat instead.
+3. **Follow the chat from another device (laptop or tablet), not the phone.** Leave the phone unlocked, on the app being tested, and untouched while it works. Opening the Claude app on the phone moves the foreground app under the agent, and its taps land in the chat instead. The strip at the top left of the phone shows what the agent is doing, and when it needs you, the phone rings and vibrates and shows an orange "Claude needs you" card: do what it says, then tap **Done**.
 
 Then wait for the address and token before sending any command. If the user already gave them in this conversation, skip straight to connecting. The user may call the token "phone password".
 
@@ -73,8 +73,12 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 | `press_button back` (home, recents, notifications) | System buttons |
 | `launch_app com.example.notes` / `launch_app Settings` | Open an app; waits until it is in front |
 | `screenshot --out file.jpg` (then Read the jpg) | Visual check. `labels=true` draws the numbered boxes. Multiply image coords by the printed factor for taps. |
+| `ask_user "Please pick a photo in the picker" wait=60` | **Ask the person for help** (pick a file, unlock, sign in, confirm by eye). Rings and vibrates (`alert=vibrate` or `alert=none` to be quieter), shows an orange card with **Done** and a notification with **Done** (works on the lock screen and in system screens). `wait=N` (max 80) blocks until Done; `ask_user wait=60` keeps waiting; `ask_user clear=true` withdraws it. |
+| `status "Login test 3/8"` | Task line shown on the phone above the current action. Set it at the start of each test. |
 | `list_apps`, `open_url`, `wait seconds=1` | Misc. Prefer `wait_for` over fixed `wait`. |
 | `batch '[["tap_id",{"id":5}],["type_text",{"text":"hi"}]]'` | Several steps in one round trip, stops at the first error |
+
+**The phone shows what you are doing.** Every command updates a small strip at the top left of the phone ("Claude: Tapping \"Save\"…", then ✓ or ✗) with a Stop button. Your taps pass through it, it hides itself on system screens (file picker, permission and install dialogs) and after 60 s without commands, and `get_screen` never lists it. Stop ends the bridge: if commands suddenly fail to connect, the user may have pressed it.
 
 **Every action returns the new screen** after it settles, as `ok: <message>` (or `error: ...`), a blank line, `screen:`, then the screen list. So you rarely need a separate `get_screen`. Add `observe=false` to get only the first line (faster when you don't need the screen, e.g. inside loops).
 
@@ -117,12 +121,13 @@ When asked to time steps:
 
 ## 6. Known pitfalls
 
-- **The user watching on the phone.** If `app=` shows `com.anthropic.claude` (or anything other than the app under test and its pickers), stop immediately. Don't tap: `tap_text` searches every window and can hit buttons in the user's chat. Tell the user what happened and ask them to watch from another device.
+- **The user watching on the phone.** If `app=` shows `com.anthropic.claude` (or anything other than the app under test and its pickers), stop immediately. Don't tap: `tap_text` searches every window and can hit buttons in the user's chat. Tell the user what happened and ask them to watch from another device. To get their attention on the phone instead, use `ask_user` (it notifies over any app).
 - **Long-running work in an app.** Buttons often show `disabled` while it runs; poll until they're enabled (section 5). Results shown in one long text block need `get_text`, after scrolling it onto the screen.
 - **Leftover keyboard.** A field focused in an earlier run keeps the keyboard open, which hides buttons near the bottom (the header shows `Keyboard open from y=...`). `press_button back` hides it. `press_button back` on an app's root screen exits the app.
 - **The relaunch resets the app.** `launch_app` can bring an app back on its main screen, losing in-app state such as a log on screen. Read logs with `get_text` before switching away.
-- **System file picker (`com.google.android.documentsui`).** It ignores automated taps and accessibility clicks on files (seen on Android 11-15 by other automation tools too; Edge panels off didn't help). Taps there also stall for about 15 s and can cause a 502. Its search and toolbar work. Ask the user to tap the file themselves, from another device's chat, then continue.
+- **System file picker (`com.google.android.documentsui`).** It ignores automated taps and accessibility clicks on files (seen on Android 11-15 by other automation tools too; Edge panels off didn't help). Taps there also stall for about 15 s and can cause a 502. Its search and toolbar work. Ask for it with `ask_user "Please pick <file> in the picker, then tap Done" wait=80` (the notification's Done works there; the card is hidden on that screen), then check the app's screen and continue.
 - `type_text` with `submit=true` (IME Enter) can hang about 30 s in some fields (seen in the file picker search). Type without submit, then tap the result or the app's button.
+- **Needing the user.** Whenever you are blocked on something only the person can do (lock screen, sign-in, a picker, a permission prompt, a physical check), use `ask_user` with one short, specific instruction instead of only writing in chat: they may not be looking at the chat. Keep waiting with `ask_user wait=...` calls; after about 5 minutes without Done, stop and report.
 - Never type passwords, PINs, or sign in to accounts for the user; never send messages or make purchases.
 - Agents can't install an APK: Android always asks the user to tap Install. Give them the APK and ask them to install it.
 - Phone Pilot keeps the screen on for 3 minutes after each command (removed automatically in the file picker). It can't stop the power button.

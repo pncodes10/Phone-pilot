@@ -96,6 +96,19 @@ public final class DeviceTools {
                     + "(item number), or text / res_id to find it.",
                     props("id", "integer", "Item number", "text", "string", "Part of its text",
                           "res_id", "string", "Resource id")));
+            t.put(tool("ask_user",
+                    "Ask the person holding the phone to do something you can't (pick a file, unlock, sign "
+                    + "in, check something by eye). Shows an orange card with a Done button and a notification "
+                    + "that rings and vibrates. wait=N blocks up to N seconds (max 80) for Done; call again "
+                    + "with only wait to keep waiting, or clear=true to withdraw the request.",
+                    props("message", "string", "What you need, in plain words",
+                          "alert", "string", "sound (default), vibrate or none",
+                          "wait", "number", "Seconds to wait for Done (0-80, default 0)",
+                          "clear", "boolean", "Withdraw the current request")));
+            t.put(tool("status",
+                    "Set the task line shown on the phone above the current action, e.g. \"Login test 3/8\". "
+                    + "Empty text clears it.",
+                    props("text", "string", "Short task description"), "text"));
             t.put(tool("wait", "Fixed pause (max 10 seconds). Prefer wait_for or wait_gone.",
                     props("seconds", "number", "Seconds to wait"), "seconds"));
             return t;
@@ -184,6 +197,50 @@ public final class DeviceTools {
     /** Run one tool. Serialised so the agent and the Wi-Fi bridge never act at the same time. */
     public synchronized Result run(String name, JSONObject in) {
         actionStart = SystemClock.uptimeMillis();
+        boolean show = !name.equals("ask_user") && !name.equals("status");
+        String what = show ? describeAction(name, in) : "";
+        if (show) svc.panel.setAction(what + "…");
+        Result r = runInner(name, in);
+        if (show) svc.panel.setAction(what + (r.isError ? "  ✗" : "  ✓"));
+        return r;
+    }
+
+    /** What the status strip says while a command runs. */
+    private String describeAction(String name, JSONObject in) {
+        String text = clip(in.optString("text", ""));
+        switch (name) {
+            case "get_screen": return "Reading the screen";
+            case "screenshot": return "Taking a screenshot";
+            case "tap_id": return "Tapping " + svc.peekLabel(in.optInt("id", -1));
+            case "tap_element": return "Tapping " + svc.peekLabel(in.optInt("index", in.optInt("id", -1)));
+            case "tap_text": return "Tapping " + (text.isEmpty() ? in.optString("res_id", "") : "\"" + text + "\"");
+            case "tap": return "Tapping at " + in.optInt("x") + "," + in.optInt("y");
+            case "long_press": return "Long-pressing at " + in.optInt("x") + "," + in.optInt("y");
+            case "swipe": return "Swiping";
+            case "scroll": return "Scrolling " + in.optString("direction", "");
+            case "type_text": return "Typing \"" + text + "\"";
+            case "press_button": return "Pressing " + in.optString("button", "");
+            case "list_apps": return "Listing apps";
+            case "launch_app": return "Opening " + in.optString("app", "");
+            case "open_url": return "Opening a link";
+            case "wait_for": return "Waiting for \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\"";
+            case "wait_gone": return "Waiting for \"" + (text.isEmpty() ? in.optString("res_id", "") : text) + "\" to go";
+            case "get_text": return "Reading text";
+            case "batch": {
+                JSONArray st = in.optJSONArray("steps");
+                return "Running " + (st == null ? 0 : st.length()) + " steps";
+            }
+            case "wait": return "Waiting " + in.optDouble("seconds", 1) + " s";
+            default: return name;
+        }
+    }
+
+    private static String clip(String s) {
+        s = s.replace('\n', ' ');
+        return s.length() > 24 ? s.substring(0, 23) + "…" : s;
+    }
+
+    private Result runInner(String name, JSONObject in) {
         try {
             switch (name) {
                 case "get_screen": {
@@ -244,6 +301,11 @@ public final class DeviceTools {
                 }
                 case "get_text":
                     return getText(in);
+                case "ask_user":
+                    return askUser(in);
+                case "status":
+                    svc.panel.setTask(in.optString("text", ""));
+                    return ok("Status set.");
                 case "wait_for":
                     return waitFor(in, false);
                 case "wait_gone":
@@ -360,6 +422,28 @@ public final class DeviceTools {
 
     private static PilotService.Outcome outcome(String msg, String okPrefix) {
         return msg.startsWith(okPrefix) ? PilotService.Outcome.ok(msg) : PilotService.Outcome.fail(msg);
+    }
+
+    private Result askUser(JSONObject in) {
+        StatusPanel p = svc.panel;
+        if (in.optBoolean("clear", false)) {
+            p.clearAsk();
+            return ok("Request withdrawn.");
+        }
+        String msg = in.optString("message", "").trim();
+        if (!msg.isEmpty()) {
+            p.ask(msg, in.optString("alert", "sound").toLowerCase(java.util.Locale.US));
+            Log.add("Asked the user: " + msg);
+        } else if (!p.asking() && !p.answered()) {
+            return err("No request is open. Pass message.");
+        }
+        double secs = Math.min(80, Math.max(0, in.optDouble("wait", 0)));
+        if (secs > 0 && !p.answered()) p.waitAnswer((long) (secs * 1000));
+        if (p.answered()) return ok("The user tapped Done (" + (p.askAgeMs() / 1000) + " s after the request).");
+        if (secs > 0) return ok("No answer yet after " + (long) secs + " s; the request is still showing. "
+                + "Call ask_user wait=N again to keep waiting.");
+        return ok("Request shown on the phone with " + in.optString("alert", "sound") + ". Call ask_user wait=N "
+                + "to wait for Done, or check the screen.");
     }
 
     private Result getText(JSONObject in) throws JSONException {

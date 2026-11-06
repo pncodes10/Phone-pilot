@@ -192,6 +192,8 @@ A clickable row is named after the text inside it, and that text isn't listed ag
 
 **Numbered items.** Each screen read numbers the items and remembers them. `tap_id 5` taps item 5, and `type_text text="Box A" id=6` types into item 6. Before acting, the phone checks the item is still there with the same id, text and position. If the screen changed, nothing is tapped and you get an error plus the new screen. `tap_element` still works as another name for `tap_id`. Numbers now start at 1.
 
+**What Claude is doing, and when it needs you (0.8).** While Claude controls the phone, a small strip over the left half of the status bar shows the task and the current action ("Claude: Tapping "Save"…", then ✓ or ✗), with a **Stop** button that ends the bridge. Claude's own taps pass through it, it hides on system screens such as the file picker, and it goes away after 60 s without commands. `status "Login test 3/8"` sets the task line. When Claude needs you, `ask_user "Please pick a photo, then tap Done" wait=60` rings and vibrates the phone (`alert=vibrate` or `alert=none` to be quieter), shows an orange card with a **Done** button and posts a notification with its own **Done** (for the lock screen and system screens), and waits up to 80 s for Done. Allow notifications when Phone Pilot asks on Android 13+; without that permission it still rings and vibrates, but there is no notification.
+
 **Full text.** The screen list cuts long text at 80 characters. `get_text 4` (or `get_text text="Compress"`) returns item 4's whole text, e.g. a log.
 
 **Tap by text.** `tap_text "Add item"` (or `res_id=save_btn`) taps the best visible match: exact text first, then clickable items.

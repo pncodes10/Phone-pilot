@@ -64,8 +64,8 @@ public class PilotService extends AccessibilityService {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService screenshotExecutor = Executors.newSingleThreadExecutor();
 
-    private View overlay;
-    private TextView overlayText;
+    /** Status strip (current action) and the "Claude needs you" card and notification. */
+    final StatusPanel panel = new StatusPanel(this);
 
     final DeviceTools tools = new DeviceTools(this);
     final AgentRunner agent = new AgentRunner(this);
@@ -75,6 +75,7 @@ public class PilotService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         instance = this;
+        panel.register();
         Log.add("Accessibility service connected.");
     }
 
@@ -86,7 +87,7 @@ public class PilotService extends AccessibilityService {
         if (pkg != null && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
                 && !getPackageName().contentEquals(pkg)) {
             String p = pkg.toString();
-            if (!p.equals(fgPkg)) { fgPkg = p; main.post(syncAwakeView); }
+            if (!p.equals(fgPkg)) { fgPkg = p; main.post(syncAwakeView); panel.onForeground(p); }
         }
     }
 
@@ -98,7 +99,7 @@ public class PilotService extends AccessibilityService {
     private volatile String fgPkg = "";
 
     /** System screens that ignore taps while any other app draws a window on top (tapjacking protection). */
-    private static boolean sensitive(String pkg) {
+    static boolean sensitive(String pkg) {
         return pkg.contains("documentsui") || pkg.contains("permissioncontroller")
                 || pkg.contains("packageinstaller") || pkg.contains("photopicker") || pkg.contains("mediaprovider");
     }
@@ -193,7 +194,7 @@ public class PilotService extends AccessibilityService {
         agent.stop();
         remote.stop();
         relay.stop();
-        hideOverlay();
+        panel.unregister();
         instance = null;
         super.onDestroy();
     }
@@ -516,6 +517,14 @@ public class PilotService extends AccessibilityService {
 
     synchronized int currentSeq() { return screenSeq; }
 
+    /** A short name for item num of the latest screen, for the status strip. */
+    synchronized String peekLabel(int num) {
+        Elem e = numbered.get(num);
+        if (e == null) return "[" + num + "]";
+        String d = describe(e);
+        return d.length() > 30 ? d.substring(0, 29) + "…" : d;
+    }
+
     /**
      * Looks up a number from the latest screen read and checks the item is still there and
      * unchanged. On a problem returns null and puts the reason in why.
@@ -734,7 +743,7 @@ public class PilotService extends AccessibilityService {
         return best;
     }
 
-    private boolean gesture(int x1, int y1, int x2, int y2, int ms) {
+    private boolean rawGesture(int x1, int y1, int x2, int y2, int ms) {
         Path p = new Path();
         p.moveTo(x1, y1);
         if (x1 != x2 || y1 != y2) p.lineTo(x2, y2);
@@ -750,6 +759,13 @@ public class PilotService extends AccessibilityService {
         if (!sent) return false;
         try { done.await(ms + 3000, TimeUnit.MILLISECONDS); } catch (InterruptedException ignored) { }
         return ok.get();
+    }
+
+    /** A gesture that passes through Phone Pilot's own status strip and request card. */
+    private boolean gesture(int x1, int y1, int x2, int y2, int ms) {
+        panel.passThrough(true);
+        try { return rawGesture(x1, y1, x2, y2, ms); }
+        finally { panel.passThrough(false); }
     }
 
     /** Type into item [num] from the latest screen read, or into the focused field when num < 0. */
@@ -964,62 +980,10 @@ public class PilotService extends AccessibilityService {
         try { Thread.sleep(ms); } catch (InterruptedException ignored) { }
     }
 
-    // ------------------------------------------------------------------ status overlay
+    // ------------------------------------------------------------------ status strip
 
-    /** Small floating bar with a Stop button, shown while Claude is in control. */
-    public void showOverlay(final String status) {
-        main.post(new Runnable() {
-            @Override public void run() {
-                if (overlay == null) {
-                    LinearLayout bar = new LinearLayout(PilotService.this);
-                    bar.setOrientation(LinearLayout.HORIZONTAL);
-                    bar.setBackgroundColor(Color.argb(200, 30, 30, 30));
-                    bar.setPadding(16, 8, 8, 8);
-                    overlayText = new TextView(PilotService.this);
-                    overlayText.setTextColor(Color.WHITE);
-                    overlayText.setTextSize(12);
-                    overlayText.setMaxLines(2);
-                    bar.addView(overlayText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-                    Button stop = new Button(PilotService.this);
-                    stop.setText("Stop");
-                    stop.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) { agent.stop(); relay.stop(); remote.stop(); hideOverlay(); }
-                    });
-                    bar.addView(stop);
-                    WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                            WindowManager.LayoutParams.MATCH_PARENT,
-                            WindowManager.LayoutParams.WRAP_CONTENT,
-                            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                                    | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON, // taps don't reset the screen timeout
-                            PixelFormat.TRANSLUCENT);
-                    lp.gravity = Gravity.BOTTOM;
-                    lp.y = 220;
-                    ((WindowManager) getSystemService(WINDOW_SERVICE)).addView(bar, lp);
-                    overlay = bar;
-                }
-                overlayText.setText(status);
-                // Let the screen sleep again after 3 idle minutes without commands.
-                main.removeCallbacks(idleHide);
-                main.postDelayed(idleHide, 3 * 60 * 1000);
-            }
-        });
-    }
+    /** Shows the status strip with this task line (used by the on-phone agent). */
+    public void showOverlay(String status) { panel.setTask(status); }
 
-    private final Runnable idleHide = new Runnable() {
-        @Override public void run() { if (!agent.isRunning()) hideOverlay(); }
-    };
-
-    public void hideOverlay() {
-        main.post(new Runnable() {
-            @Override public void run() {
-                if (overlay != null) {
-                    try { ((WindowManager) getSystemService(WINDOW_SERVICE)).removeView(overlay); }
-                    catch (Exception ignored) { }
-                    overlay = null;
-                }
-            }
-        });
-    }
+    public void hideOverlay() { panel.hide(); }
 }

@@ -143,7 +143,7 @@ public final class AgentRunner {
                     JSONObject input = block.optJSONObject("input");
                     if (input == null) input = new JSONObject();
                     Log.add("Step " + step + ": " + name + " " + input);
-                    svc.showOverlay("Claude step " + step + ": " + name);
+                    svc.showOverlay("On-phone agent, step " + step);
                     DeviceTools.Result res = tools.run(name, input);
                     Log.add("  → " + shorten(res.text));
                     JSONObject tr = new JSONObject();

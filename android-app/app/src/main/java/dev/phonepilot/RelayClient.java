@@ -151,7 +151,6 @@ public final class RelayClient {
                 return;
             }
             Log.add("Claude (relay): " + name + " " + input);
-            svc.showOverlay("Claude is controlling this phone: " + name);
             DeviceTools.Result res = svc.tools.run(name, input);
             reply(reqId, res, null, res.isError);
         } catch (Exception e) {

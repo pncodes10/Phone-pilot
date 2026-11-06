@@ -40,6 +40,10 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         prefs = getSharedPreferences("pilot", MODE_PRIVATE);
         if (!prefs.contains("token")) prefs.edit().putString("token", newToken()).apply();
+        // Android 13+: needed for the "Claude needs you" notification (ring and vibrate).
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
