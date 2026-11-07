@@ -246,3 +246,11 @@ Report: a table of step times (say which part was the app's own work: the job's 
 
 For each test, say what you did, what the screen showed (quote on-screen text, attach or describe screenshots), the time per step when asked, and anything that failed, with the exact error. Distinguish app bugs from Phone Pilot or connection problems. Save long logs to a file and send it.
 
+**Last step, once every instruction is done: open the Claude app on the phone** so the user lands on the chat with your results:
+
+```bash
+$C launch_app com.anthropic.claude observe=false
+```
+
+Do this only at the very end (after any `ask_user` alert is cleared and all logs are collected): it moves the app under test to the background, and you send no taps after it. If the task stopped early because you were blocked, still open Claude last, after the `ask_user` that explains why.
+
