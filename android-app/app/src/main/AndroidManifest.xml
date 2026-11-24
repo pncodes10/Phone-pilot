@@ -9,6 +9,10 @@
     <!-- "Claude needs you" requests: a notification that rings and vibrates. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- install_apk: install apps (the user allows "Install unknown apps" once), and update apps
+         Phone Pilot installed earlier without the confirmation dialog (Android 12+). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- Lets list_apps / launch_app see every app that has a launcher icon (Android 11+). -->
     <queries>

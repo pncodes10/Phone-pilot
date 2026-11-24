@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
  *
  *   GET  /tools                      -> {"tools": [...]}   tool definitions
  *   POST /call  {"name","input"}     -> {"content": [...], "is_error": bool}
+ *   POST /upload?name=app.zip <raw bytes> -> {"file": "...", "bytes": n}   for install_apk file=...
  *
  * Every request must carry "Authorization: Bearer <token>" (token shown in the app).
  */
@@ -89,6 +90,16 @@ public final class RemoteServer {
             int len = 0;
             try { len = Integer.parseInt(headers.containsKey("content-length") ? headers.get("content-length") : "0"); }
             catch (NumberFormatException ignored) { }
+            String auth = headers.get("authorization");
+            if (token == null || auth == null || !constantTimeEquals(auth, "Bearer " + token)) {
+                respond(s, 401, "{\"error\":\"missing or wrong token\"}");
+                return;
+            }
+
+            if ("POST".equals(method) && path.startsWith("/upload")) {
+                upload(s, in, path, headers);
+                return;
+            }
             if (len > 1_000_000) { respond(s, 413, "{\"error\":\"too large\"}"); return; }
             byte[] body = new byte[len];
             int off = 0;
@@ -96,12 +107,6 @@ public final class RemoteServer {
                 int n = in.read(body, off, len - off);
                 if (n < 0) break;
                 off += n;
-            }
-
-            String auth = headers.get("authorization");
-            if (token == null || auth == null || !constantTimeEquals(auth, "Bearer " + token)) {
-                respond(s, 401, "{\"error\":\"missing or wrong token\"}");
-                return;
             }
 
             if ("GET".equals(method) && path.startsWith("/tools")) {
@@ -142,6 +147,41 @@ public final class RemoteServer {
         } finally {
             try { s.close(); } catch (IOException ignored) { }
         }
+    }
+
+    /** Save the raw request body (an .apk or .zip) for install_apk file=NAME. */
+    private void upload(Socket s, InputStream in, String path, Map<String, String> headers) throws Exception {
+        long len;
+        try { len = Long.parseLong(headers.containsKey("content-length") ? headers.get("content-length") : "-1"); }
+        catch (NumberFormatException e) { len = -1; }
+        if (len <= 0) { respond(s, 411, "{\"error\":\"send the file as the body, with Content-Length\"}"); return; }
+        if (len > Installer.MAX_BYTES) { respond(s, 413, "{\"error\":\"file over " + Installer.mb(Installer.MAX_BYTES) + "\"}"); return; }
+        String name = "";
+        int q = path.indexOf("name=");
+        if (q >= 0) {
+            name = path.substring(q + 5);
+            int amp = name.indexOf('&');
+            if (amp >= 0) name = name.substring(0, amp);
+            name = java.net.URLDecoder.decode(name, "UTF-8");
+        }
+        java.io.File f = Installer.newUpload(svc, name);
+        long got = 0;
+        byte[] buf = new byte[65536];
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+            while (got < len) {
+                int n = in.read(buf, 0, (int) Math.min(buf.length, len - got));
+                if (n < 0) break;
+                out.write(buf, 0, n);
+                got += n;
+            }
+        }
+        if (got < len) {
+            f.delete();
+            respond(s, 400, "{\"error\":\"upload cut off after " + got + " of " + len + " bytes\"}");
+            return;
+        }
+        Log.add("Remote: uploaded " + f.getName() + " (" + Installer.mb(got) + ")");
+        respond(s, 200, new JSONObject().put("file", f.getName()).put("bytes", got).toString());
     }
 
     private static boolean constantTimeEquals(String a, String b) {

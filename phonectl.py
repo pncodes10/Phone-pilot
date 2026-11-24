@@ -9,6 +9,7 @@ API key: it runs this script once per action.
     python phonectl.py PAIRING wait_for text="Saved" timeout=5
     python phonectl.py PAIRING type_text '{"text": "Box A", "id": 3}'
     python phonectl.py PAIRING screenshot --out shot.jpg
+    python phonectl.py PAIRING install_apk app/build/app-debug.apk   # or a .zip, or an https:// link
     python phonectl.py run test.yaml            # replay a test script, no Claude needed
 
 PAIRING is the text the app shows, e.g. "phonepilot:https://ntfy.sh#3fa9..." or
@@ -45,6 +46,8 @@ import secrets
 import sys
 import re
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 try:
@@ -153,8 +156,55 @@ def call_bridge(target: str, name: str, args: dict, timeout: float = 90) -> dict
 
 def send(pairing: str, name: str, args: dict, timeout: float = 90) -> dict:
     """One tool call over whichever transport the pairing text names."""
+    if name == "install_apk" and isinstance(args, dict):
+        return install(pairing, args, timeout)
     fn = call_bridge if pairing.strip().startswith("bridge:") else call
     return fn(pairing, name, args, timeout)
+
+
+def upload(target: str, path: str, timeout: float = 600) -> str:
+    """Send a local file to the phone (Wi-Fi bridge only). Returns the name install_apk file= takes."""
+    if not target.strip().startswith("bridge:"):
+        raise SystemExit("Sending a file needs the Wi-Fi bridge (bridge:...). In relay mode pass a url instead.")
+    url, _, token = target[len("bridge:"):].strip().rpartition("#")
+    size = os.path.getsize(path)
+    print(f"[uploading {os.path.basename(path)}, {size / 1048576:.1f} MB]", file=sys.stderr)
+    with open(path, "rb") as f:
+        req = urllib.request.Request(
+            url.rstrip("/") + "/upload?name=" + urllib.parse.quote(os.path.basename(path)), method="POST", data=f,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream",
+                     "Content-Length": str(size)})
+        try:
+            with _opener.open(req, timeout=timeout) as r:
+                return json.loads(r.read())["file"]
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            if e.code == 404:
+                detail += " (this Phone Pilot is older than 0.11; update it to send files)"
+            raise SystemExit(f"Upload failed: HTTP {e.code} {detail}")
+
+
+def install(pairing: str, args: dict, timeout: float = 90) -> dict:
+    """install_apk with a local .apk/.zip (sent first), a url, or check=true; waits until it's done."""
+    args = dict(args)
+    src = str(args.pop("source", "") or "")
+    if src.startswith(("http://", "https://")):
+        args.setdefault("url", src)
+    elif src:
+        args["file"] = src
+    f = str(args.get("file", "") or "")
+    if f and os.path.exists(os.path.expanduser(f)):
+        args["file"] = upload(pairing, os.path.expanduser(f))
+    elif f and ("/" in f or f.lower().endswith((".apk", ".zip", ".apks")) and not f.startswith("up-")):
+        raise SystemExit(f"No such file: {f}")
+    fn = call_bridge if pairing.strip().startswith("bridge:") else call
+    args.setdefault("wait", 60)
+    res = fn(pairing, "install_apk", args, max(timeout, args["wait"] + 30))
+    deadline = time.time() + 900
+    while result_text(res).startswith("Still working") and time.time() < deadline:
+        print("[" + result_text(res).split(". Call")[0] + "]", file=sys.stderr)
+        res = fn(pairing, "install_apk", {"check": True, "wait": 60}, 90)
+    return res
 
 
 def result_text(res: dict) -> str:
@@ -178,6 +228,7 @@ MAIN_PARAM = {
     "type_text": ("text", True), "launch_app": ("app", True), "open_url": ("url", True),
     "scroll": ("direction", True), "press_button": ("button", True), "wait": ("seconds", False),
     "wait_for": ("text", True), "scroll_to": ("text", True), "wait_gone": ("text", True), "list_apps": ("filter", True),
+    "install_apk": ("source", True),
 }
 # Tools whose bare values fill several parameters in order: "tap 540 1820".
 POSITIONAL = {"tap": ("x", "y"), "long_press": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2")}
@@ -376,7 +427,7 @@ def _arg(value, key: str) -> dict:
     return {} if value is None else {key: value}
 
 
-def plan_step(step, app: str | None, default_timeout: float) -> tuple[str, list[tuple[str, dict]]]:
+def plan_step(step, app: str | None, default_timeout: float, base_dir: str = "") -> tuple[str, list[tuple[str, dict]]]:
     """Turn one script step into (description, [(tool, args), ...])."""
     if isinstance(step, str):
         kind, value = step.strip(), None
@@ -443,6 +494,12 @@ def plan_step(step, app: str | None, default_timeout: float) -> tuple[str, list[
         return label, [("open_url", _arg(value, "url"))]
     if kind == "screenshot":
         return label, [("screenshot", {})]
+    if kind in ("install", "install_apk"):
+        args = _arg(value, "source")
+        src = str(args.get("source", ""))
+        if src and not src.startswith(("http://", "https://")) and base_dir and not os.path.isabs(os.path.expanduser(src)):
+            args["source"] = os.path.join(base_dir, src)   # relative to the script
+        return label, [("install_apk", args)]
     raise ValueError(f"unknown step '{kind}'")
 
 
@@ -460,7 +517,7 @@ def run_script(pairing: str, path: str, keep_going: bool, out_dir: str | None, t
     for n, step in enumerate(steps, 1):
         t0 = time.time()
         try:
-            label, calls = plan_step(step, app, default_timeout)
+            label, calls = plan_step(step, app, default_timeout, os.path.dirname(os.path.abspath(path)))
         except (ValueError, KeyError, TypeError) as e:
             print(f"  FAIL  {n:>3}  {step!r}  bad step: {e}")
             failed += 1
@@ -484,7 +541,7 @@ def run_script(pairing: str, path: str, keep_going: bool, out_dir: str | None, t
                 if text.startswith("Unknown tool"):
                     detail += " (this step needs Phone Pilot 0.7 or newer on the phone)"
                 break
-            if not detail and tool in ("wait_for", "wait_gone"):
+            if not detail and tool in ("wait_for", "wait_gone", "install_apk"):
                 detail = text.splitlines()[0] if text else ""
         ms = int((time.time() - t0) * 1000)
         line = f"  {'PASS' if ok else 'FAIL'}  {n:>3}  {label[:60]:<60} {ms:>6} ms"
@@ -541,7 +598,7 @@ def main() -> None:
     ap.add_argument("pairing", help='pairing text from the app, or "-" (or nothing) to read PHONE_PAIRING')
     ap.add_argument("tool", help="get_screen, tap_id, tap_text, type_text, wait_for, wait_gone, screenshot, tap, "
                                  "swipe, scroll, press_button, list_apps, launch_app, open_url, long_press, "
-                                 "wait, batch, or 'run SCRIPT'")
+                                 "wait, install_apk FILE_OR_URL, batch, or 'run SCRIPT'")
     ap.add_argument("input", nargs="*", help="tool arguments as JSON, or key=value pairs")
     ap.add_argument("--out", default="screenshot.jpg", help="where to save a screenshot")
     ap.add_argument("--timeout", type=float, default=90)

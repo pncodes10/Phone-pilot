@@ -70,6 +70,7 @@ public class PilotService extends AccessibilityService {
     final DeviceTools tools = new DeviceTools(this);
     final AgentRunner agent = new AgentRunner(this);
     final RemoteServer remote = new RemoteServer(this);
+    final Installer installer = new Installer(this);
     final RelayClient relay = new RelayClient(this);
 
     @Override

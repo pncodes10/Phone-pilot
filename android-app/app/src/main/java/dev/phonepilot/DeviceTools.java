@@ -121,6 +121,17 @@ public final class DeviceTools {
                     "Set the task line shown on the phone above the current action, e.g. \"Login test 3/8\". "
                     + "Empty text clears it.",
                     props("text", "string", "Short task description"), "text"));
+            t.put(tool("install_apk",
+                    "Install an app from a link (url) or from a file sent with POST /upload (file). A .zip is "
+                    + "opened and the APK inside installed (base + split APKs together); errors if there is no APK. "
+                    + "Taps Install in Android's confirmation dialog itself unless confirm=false. Waits up to wait "
+                    + "seconds (default 60, max 80); if still busy, call again with check=true.",
+                    props("url", "string", "http(s) link to an .apk or .zip",
+                          "file", "string", "Name returned by POST /upload",
+                          "apk", "string", "Which APK in a zip that holds several (part of its name)",
+                          "confirm", "boolean", "Tap Install in the system dialog (default true)",
+                          "wait", "number", "Seconds to wait for the result (0-80, default 60)",
+                          "check", "boolean", "Report on the install already started")));
             t.put(tool("wait", "Fixed pause (max 10 seconds). Prefer wait_for or wait_gone.",
                     props("seconds", "number", "Seconds to wait"), "seconds"));
             return t;
@@ -261,6 +272,7 @@ public final class DeviceTools {
                 JSONArray st = in.optJSONArray("steps");
                 return "Running " + (st == null ? 0 : st.length()) + " steps";
             }
+            case "install_apk": return in.optBoolean("check", false) ? "Checking the install" : "Installing an app";
             case "wait": return "Waiting " + in.optDouble("seconds", 1) + " s";
             default: return name;
         }
@@ -378,6 +390,12 @@ public final class DeviceTools {
                         if (v.jpeg != null) img = v.jpeg;
                     }
                     return new Result(log.toString(), img, failed);
+                }
+                case "install_apk": {
+                    String[] r = svc.installer.run(in.optString("url", "").trim(), in.optString("file", "").trim(),
+                            in.optString("apk", "").trim(), in.optBoolean("confirm", true),
+                            Math.min(80, Math.max(0, in.optDouble("wait", 60))), in.optBoolean("check", false));
+                    return new Result(r[1], null, r[0].equals("1"));
                 }
                 case "wait": {
                     double s = Math.min(10, Math.max(0, in.optDouble("seconds", 1)));

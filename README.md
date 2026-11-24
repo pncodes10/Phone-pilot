@@ -196,6 +196,8 @@ A clickable row is named after the text inside it, and that text isn't listed ag
 
 **Fewer round trips (0.10).** `scroll_to text="Result"` swipes until the item is on screen and stops at the end of the list. `wait_for text="Run" exact=true enabled=true timeout=60` waits on the phone for a button to come back after the app's work. Both replace loops of `get_screen` calls over the tunnel. Add `in_app=com.example.app` to an action, or `export PHONE_APP=com.example.app` once for `phonectl.py`, and taps, typing and gestures are refused whenever another app is in front.
 
+**Installing builds (0.11).** `phonectl.py PAIR install_apk app-debug.apk` sends the file over the bridge (`POST /upload`) and installs it; `install_apk https://example.com/app.zip` has the phone download it. A `.zip` is opened and its APK installed (split APKs `base.apk` + `split_*.apk` together; `apk=<part of name>` picks one of several), and a zip without an APK fails with `No APK file found` and the list of what it holds. Phone Pilot taps Install in Android's confirmation dialog (`confirm=false` leaves it to the person), leaves Play Protect dialogs to the person, and reports the installed package and version or the reason it failed. Android 12+ updates apps Phone Pilot installed before without any dialog. The first time, Android asks to allow "Install unknown apps" for Phone Pilot. Long downloads run in the background: the tool returns `Still working ...` after `wait` seconds (default 60) and `install_apk check=true` asks again; `phonectl.py` does that for you. In test scripts: `- install: build/app-debug.apk`.
+
 **Full text.** The screen list cuts long text at 80 characters. `get_text 4` (or `get_text text="Compress"`) returns item 4's whole text, e.g. a log.
 
 **Tap by text.** `tap_text "Add item"` (or `res_id=save_btn`) taps the best visible match: exact text first, then clickable items.
@@ -248,6 +250,7 @@ It stops at the first failure (`--keep-going` carries on), saves a screenshot an
 | `back`, `home`, `recents`, `press: back` | System buttons |
 | `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]` | Gestures |
 | `wait: 1.5`, `open_url: https://...`, `screenshot` | Pause, open a link, save a screenshot |
+| `install: build/app-debug.apk` / `install: https://.../app.zip` | Install a build (path relative to the script); passes when Android reports it installed |
 
 `examples/storage-planner.yaml` is a read-only smoke test of Storage Planner (`com.storageplanner`): main screen, the target field, and Algorithm Lab.
 

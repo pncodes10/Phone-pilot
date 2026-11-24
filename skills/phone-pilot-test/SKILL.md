@@ -94,6 +94,7 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 | `status "Login test 3/8"` | Task line shown on the phone above the current action. Set it at the start of each test; `status ""` clears it at the end. |
 | `in_app=com.example.notes` on any tap/type/gesture, or `export PHONE_APP=...` once | **Guard**: the action is refused (nothing done, new screen returned) when another app is in front. Comma-separate extra packages: **include the file picker (`com.google.android.documentsui`) whenever the task opens it**, or the guard refuses the steps around it, e.g. `PHONE_APP=com.example.notes,com.google.android.documentsui`. |
 | `list_apps "storage"` | Find an app's package from its name: prints `Storage Planner  (com.storageplanner)`, one app per line. `launch_app` also takes the plain name. |
+| `install_apk app-debug.apk` / `install_apk build.zip` / `install_apk https://.../app.apk` | **Install a build** (Phone Pilot 0.11+). A local file is sent over the bridge first (up to 500 MB; about 100 MB through a quick tunnel); a link is downloaded by the phone. A `.zip` is opened and the APK inside installed (base + split APKs together); `apk=release` picks one when it holds several. It errors with `No APK file found` and the zip's contents when there is none. Phone Pilot taps Install in Android's dialog itself and prints `Installed <package> <version>` or `Updated <old> -> <new>`. `phonectl` keeps waiting through long downloads. |
 | `open_url`, `wait seconds=1` | Misc. Prefer `wait_for` over fixed `wait`. |
 | `batch '[["tap_id",{"id":5}],["type_text",{"text":"hi"}]]'` | Several steps in one round trip, stops at the first error |
 
@@ -140,7 +141,7 @@ steps:
   - assert_visible: "Shopping"
 ```
 
-Steps: `launch`, `tap: "text"` / `tap: {text, id, exact}` / `tap: [x, y]`, `tap_id: 5`, `type: "text"` / `type: {text, into, submit}`, `assert_visible`, `assert_gone`, `wait_for`, `wait_gone`, `back`, `home`, `press: back`, `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]`, `wait: 1.5`, `open_url`, `screenshot`.
+Steps: `launch`, `tap: "text"` / `tap: {text, id, exact}` / `tap: [x, y]`, `tap_id: 5`, `type: "text"` / `type: {text, into, submit}`, `assert_visible`, `assert_gone`, `wait_for`, `wait_gone`, `back`, `home`, `press: back`, `scroll: down`, `swipe: [x1, y1, x2, y2]`, `long_press: [x, y]`, `wait: 1.5`, `open_url`, `screenshot`, `install: path-or-url`.
 
 Write a script whenever a flow will be repeated (regression checks, before/after comparisons). Use plain commands for exploring a new screen.
 
@@ -239,7 +240,7 @@ Report: a table of step times (say which part was the app's own work: the job's 
 - `type_text` with `submit=true` (IME Enter) can hang about 30 s in some fields (seen in the file picker search). Type without submit, then tap the result or the app's button.
 - **Needing the user.** Whenever you are blocked on something only the person can do (lock screen, sign-in, a picker, a permission prompt, a physical check), use `ask_user` with one short, specific instruction instead of only writing in chat: they may not be looking at the chat. Keep waiting with `ask_user wait=...` calls; after about 5 minutes without Done, stop and report.
 - Never type passwords, PINs, or sign in to accounts for the user; never send messages or make purchases.
-- Agents can't install an APK: Android always asks the user to tap Install. Give them the APK and ask them to install it.
+- **Installing builds.** The first `install_apk` may fail with "isn't allowed to install apps yet" and open the settings page: `ask_user "Turn on Allow from this source for Phone Pilot, then tap Done" wait=80`, then run it again. A Play Protect dialog ("Blocked by Play Protect", "Scan app?") is left for the person: `ask_user` them to decide; never tap "Install anyway" yourself. `failed: it conflicts with the app already installed` means a build signed with another key is on the phone: ask the user to uninstall it (don't do it yourself). Private links (GitHub artifacts, sign-in pages) can't be downloaded by the phone: download them in your sandbox and pass the file instead. In a test script: `- install: build/app-debug.apk` (path relative to the script).
 - Phone Pilot keeps the screen on for 3 minutes after each command (removed automatically in the file picker). It can't stop the power button.
 
 ## 8. Report
