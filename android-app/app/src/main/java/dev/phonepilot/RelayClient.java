@@ -202,6 +202,7 @@ public final class RelayClient {
                 HttpURLConnection c = (HttpURLConnection) new URL(server + "/poll/" + cfId).openConnection();
                 c.setConnectTimeout(20000);
                 c.setReadTimeout(40000);
+                c.setRequestProperty("User-Agent", "PhonePilot/0.11");
                 stream = c;
                 int code = c.getResponseCode();
                 if (code == 204) { c.disconnect(); backoff = 2000; if (wasDown) { Log.add("Relay connected."); wasDown = false; } continue; }
@@ -234,6 +235,7 @@ public final class RelayClient {
                 h.setDoOutput(true);
                 h.setFixedLengthStreamingMode(data.length);
                 h.setRequestProperty("Content-Type", "application/json");
+                h.setRequestProperty("User-Agent", "PhonePilot/0.11");
                 OutputStream os = h.getOutputStream();
                 os.write(data);
                 os.close();
