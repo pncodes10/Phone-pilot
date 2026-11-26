@@ -39,6 +39,7 @@ public final class RelayClient {
     private volatile boolean running;
     private volatile Thread thread;
     private volatile HttpURLConnection stream;
+    private android.os.PowerManager.WakeLock cpu;
 
     private String server;
     private String token = ""; // optional ntfy access token (tk_...), so limits count per account, not per IP
@@ -92,6 +93,18 @@ public final class RelayClient {
         resTopic = id + "-res";
         cfId = id;
         running = true;
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) svc.getSystemService(android.content.Context.POWER_SERVICE);
+            cpu = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "phonepilot:relay");
+            cpu.setReferenceCounted(false);
+            cpu.acquire(4 * 60 * 60 * 1000L);       // released by stop(); at most 4 hours
+            if (!pm.isIgnoringBatteryOptimizations(svc.getPackageName()))
+                Log.add("Tip: battery optimisation is on for Phone Pilot; Android may cut the relay connection in the background. "
+                        + "Allow it in the dialog, or set Battery to Unrestricted in App info.");
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) svc.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+            if (cm.getRestrictBackgroundStatus() == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED)
+                Log.add("Tip: Data Saver is blocking Phone Pilot's background data. In App info > Mobile data, allow data while Data Saver is on.");
+        } catch (Exception e) { Log.add("Could not keep the phone awake for the relay: " + e.getMessage()); }
         thread = new Thread(new Runnable() { @Override public void run() { if (cf) loopCf(); else loop(); } }, "relay");
         thread.start();
         Log.add("Relay mode on. Waiting for Claude's commands via " + server);
@@ -100,6 +113,7 @@ public final class RelayClient {
     public synchronized void stop() {
         if (!running) return;
         running = false;
+        try { if (cpu != null && cpu.isHeld()) cpu.release(); } catch (Exception ignored) { }
         HttpURLConnection c = stream;
         if (c != null) c.disconnect();
         Thread t = thread;
@@ -205,7 +219,7 @@ public final class RelayClient {
                 HttpURLConnection c = (HttpURLConnection) new URL(server + "/poll/" + cfId).openConnection();
                 c.setConnectTimeout(20000);
                 c.setReadTimeout(40000);
-                c.setRequestProperty("User-Agent", "PhonePilot/0.12");
+                c.setRequestProperty("User-Agent", "PhonePilot/0.13");
                 stream = c;
                 int code = c.getResponseCode();
                 if (code == 204) { c.disconnect(); backoff = 2000; if (wasDown) { Log.add("Relay connected."); wasDown = false; } continue; }
@@ -225,10 +239,13 @@ public final class RelayClient {
                 postReply(m.getInt("c"), answer);
             } catch (Exception e) {
                 if (!running) break;
+                String why = String.valueOf(e.getMessage());
+                if (!wasDown) Log.add("Relay connection problem, retrying: " + why
+                        + (why.contains("abort") || why.contains("reset") ? " (Android cut the connection: set Phone Pilot's Battery to Unrestricted"
+                           + " and allow background data, or keep the phone unlocked)" : ""));
                 wasDown = true;
-                Log.add("Relay connection problem, retrying: " + e.getMessage());
                 PilotService.sleep(backoff);
-                backoff = Math.min(backoff * 2, 30000);
+                backoff = Math.min(backoff * 2, 10000);
             }
         }
     }
@@ -244,7 +261,7 @@ public final class RelayClient {
                 h.setDoOutput(true);
                 h.setFixedLengthStreamingMode(data.length);
                 h.setRequestProperty("Content-Type", "application/json");
-                h.setRequestProperty("User-Agent", "PhonePilot/0.12");
+                h.setRequestProperty("User-Agent", "PhonePilot/0.13");
                 OutputStream os = h.getOutputStream();
                 os.write(data);
                 os.close();

@@ -217,6 +217,20 @@ public class MainActivity extends Activity {
                 + "#" + prefs.getString("pairing", "");
     }
 
+    /**
+     * Relay mode keeps a connection open while other apps are in front. With battery optimisation on, Android cuts it
+     * ("Software caused connection abort"), so ask once to be left out of it. The system shows its own Allow / Deny dialog.
+     */
+    private void askBatteryExemption() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:" + getPackageName())));
+        } catch (Exception e) {
+            toast("Set Phone Pilot's Battery to Unrestricted in App info, so the relay keeps working in the background.");
+        }
+    }
+
     private void toggleRelay() {
         PilotService s = PilotService.get();
         if (s == null) { toast("Turn on the accessibility service first."); return; }
@@ -226,6 +240,7 @@ public class MainActivity extends Activity {
             save();
             try { s.relay.start(relayServer.getText().toString().trim(), prefs.getString("pairing", ""), relayToken.getText().toString().trim()); }
             catch (Exception e) { toast("Could not start: " + e.getMessage()); }
+            askBatteryExemption();
         }
         refresh();
     }
