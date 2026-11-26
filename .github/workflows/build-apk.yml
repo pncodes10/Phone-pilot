@@ -1,0 +1,66 @@
+name: Build APK
+
+# Builds PhonePilot.apk with Gradle on GitHub's Ubuntu runner (Android SDK included) and signs it.
+# Download it from the run's "Artifacts" section.
+#
+# Android only installs a new APK over an installed one when both are signed with the same key. Add these repository
+# secrets (Settings > Secrets and variables > Actions) so every build uses the same key and installs as an update:
+#   PILOT_KEYSTORE_B64   the keystore file as base64 (base64 -w0 phonepilot.keystore); alias must be "pilot"
+#   PILOT_KEYSTORE_PASS  its password (store and key password)
+# Without them the APK is signed with a one-off key made for that run: it installs only after uninstalling the
+# installed Phone Pilot (and then the accessibility service must be switched on again).
+
+on:
+  push:
+    paths: ["android-app/**", ".github/workflows/build-apk.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build (unsigned release)
+        working-directory: android-app
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Sign
+        env:
+          PILOT_KEYSTORE_B64: ${{ secrets.PILOT_KEYSTORE_B64 }}
+          PILOT_KEYSTORE_PASS: ${{ secrets.PILOT_KEYSTORE_PASS }}
+        run: |
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          KS="$RUNNER_TEMP/pilot.keystore"
+          if [ -n "$PILOT_KEYSTORE_B64" ]; then
+            echo "$PILOT_KEYSTORE_B64" | base64 -d > "$KS"; PASS="$PILOT_KEYSTORE_PASS"; echo "Signing with the repository key."
+          else
+            PASS=android
+            keytool -genkeypair -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias pilot -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=Phone Pilot Debug" > /dev/null
+            echo "::warning::No signing secrets: this APK is signed with a one-off key and will not install over a differently signed Phone Pilot."
+          fi
+          "$BT/apksigner" sign --v4-signing-enabled false --ks "$KS" --ks-pass "pass:$PASS" --key-pass "pass:$PASS" --ks-key-alias pilot \
+            --out PhonePilot.apk android-app/app/build/outputs/apk/release/app-release-unsigned.apk
+          "$BT/apksigner" verify --print-certs PhonePilot.apk | head -3
+          rm -f "$KS"
+          ls -l PhonePilot.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhonePilot-apk
+          path: PhonePilot.apk
+          if-no-files-found: error
+          retention-days: 30
