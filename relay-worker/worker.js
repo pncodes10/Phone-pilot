@@ -5,6 +5,7 @@
 //   phone:       GET  /poll/<id>   long-poll (about 20 s): 200 {"c":n,"p":"<blob>"} = a command, 204 = nothing yet
 //                POST /reply/<id>  body {"c":n,"p":"<blob>"}: the answer to command n
 //   controller:  POST /ctl/<id>?wait=90   body "<blob>": waits for the phone's answer and returns its blob
+//   anyone:      GET  /status/<id>  {"phone_connected": true, "phone_seen_seconds_ago": 3, "last_minute": {...}}
 //                503 = the phone has not polled lately (relay mode off or phone offline), 504 = no answer in time
 //
 // Free-plan notes: the Durable Object is SQLite-backed (required on the free plan) and only holds in-memory queues;
@@ -22,7 +23,7 @@ const LIMITS = { ctl: 120, poll: 240, reply: 240 };   // per room, per minute (a
 export default {
   async fetch(req, env) {
     const [, op, id] = new URL(req.url).pathname.split("/");
-    if (!["poll", "reply", "ctl"].includes(op) || !ID.test(id || "")) return text("Phone Pilot relay", 404);
+    if (!["poll", "reply", "ctl", "status"].includes(op) || !ID.test(id || "")) return text("Phone Pilot relay", 404);
     return env.RELAY.get(env.RELAY.idFromName(id)).fetch(req);
   },
 };
@@ -51,10 +52,21 @@ export class Relay {
       return new Response("relay busy: too many requests from this phone or pairing code, wait a minute", {
         status: 429, headers: { "content-type": "text/plain", "retry-after": "30" } });
     }
+    if (op === "status" && req.method === "GET") return this.status();
     if (op === "poll" && req.method === "GET") return this.poll();
     if (op === "reply" && req.method === "POST") return this.reply(req);
     if (op === "ctl" && req.method === "POST") return this.ctl(req);
     return text("method not allowed", 405);
+  }
+
+  /** Is a phone using this room? Times only, nothing about the messages. */
+  status() {
+    const now = Date.now(), recent = (op) => this.hits[op].filter((t) => now - t < 60000).length;
+    return json({
+      phone_connected: now - this.phoneSeen <= PHONE_SEEN_MS,
+      phone_seen_seconds_ago: this.phoneSeen ? Math.round((now - this.phoneSeen) / 1000) : null,
+      last_minute: { polls: recent("poll"), commands: recent("ctl"), replies: recent("reply") },
+    });
   }
 
   async poll() {
