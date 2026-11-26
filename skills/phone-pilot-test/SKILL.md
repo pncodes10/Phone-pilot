@@ -1,46 +1,45 @@
 ---
 name: "phone-pilot-test"
-description: "Drive pranesh's Android phone through the Phone Pilot app (Wi-Fi bridge + Cloudflare tunnel) to open, tap through, time and test apps being built, run replayable YAML test scripts, and read app logs."
+description: "Drive pranesh's Android phone through the Phone Pilot app (shared Cloudflare relay; or Wi-Fi bridge + tunnel) to open, tap through, time and test apps being built, run replayable YAML test scripts, and read app logs."
 ---
 
 # Testing apps on the phone with Phone Pilot
 
-Phone Pilot is an Accessibility Service app on the user's Android phone (Samsung S23 FE, 1080x2340). Its Wi-Fi bridge (port 8765, Bearer token) is exposed to the internet by a Cloudflare quick tunnel running in Termux. You control the phone with `phonectl.py`, one command per call, about 0.6-2 s each.
+Phone Pilot is an Accessibility Service app on the user's Android phone (Samsung S23 FE, 1080x2340). In **relay mode** (0.12+, the default) it polls the shared Phone Pilot relay, a Cloudflare Worker at `https://phonepilot-relay.ppilot-2702dc.workers.dev`; every command is end-to-end encrypted with the pairing code. (The older way, the Wi-Fi bridge on port 8765 exposed by a Cloudflare quick tunnel in Termux, still works.) You control the phone with `phonectl.py`, one command per call, about 0.6-2 s each.
 
-Source: https://github.com/pncodes10/Phone-pilot (usually checked out at /home/user/Phone-pilot; if not, `ls -d /home/user/*/phonectl.py`). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.10+**; with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
+Source: https://github.com/pncodes10/Phone-pilot (usually checked out at /home/user/Phone-pilot; if not, `ls -d /home/user/*/phonectl.py`). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.12+** (relay mode with the shared relay; 0.10+ for the bridge); with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
 
 ## 0. Tell the user the process first
 
-Before you start (and whenever you don't yet have a working address and token), tell the user these steps in plain words, as a short numbered list:
+Before you start (and whenever you don't yet have a working pairing code), tell the user these steps in plain words, as a short numbered list:
 
-Each time you want something tested:
-1. On the phone, start Phone Pilot's Wi-Fi bridge and run the `cloudflared` command in Termux: `cloudflared tunnel --url http://localhost:8765`
-2. In any thread, give the agent the tunnel address and token, and say what to test.
-3. **Follow the chat from another device (laptop or tablet), not the phone.** Leave the phone unlocked, on the app being tested, and untouched while it works. Opening the Claude app on the phone moves the foreground app under the agent, and its taps land in the chat instead. The strip at the top left of the phone shows what the agent is doing, and when it needs you, the phone rings like an alarm and shows an orange "Claude needs you" card: do what it says, then tap **Done**.
+1. On the phone, open Phone Pilot, tap **Start relay mode**, then **Share pairing code** (or **Copy pairing code**) and send it here. It starts with `phonepilot:cf:https://`. The code stays the same between sessions unless they tap "New pairing code".
+2. **Follow the chat from another device (laptop or tablet), not the phone.** Leave the phone unlocked, on the app being tested, and untouched while it works. Opening the Claude app on the phone moves the foreground app under the agent, and its taps land in the chat instead. The strip at the top left of the phone shows what the agent is doing, and when it needs you, the phone rings like an alarm and shows an orange "Claude needs you" card: do what it says, then tap **Done**.
 
-Then wait for the address and token before sending any command. If the user already gave them in this conversation, skip straight to connecting. The user may call the token "phone password".
+Then wait for the pairing code before sending any command. If the user already gave it in this conversation, skip straight to connecting. If they give a tunnel address and token instead (`https://<words>.trycloudflare.com` + hex token), use the bridge form below.
 
 ## 1. Get connected
 
-1. The address looks like `https://<words>.trycloudflare.com` and the token is a long hex string. The address changes every time the tunnel restarts; the token can change when the app is reinstalled. Never save either to memory or commit them.
-2. On the phone the user must: have Phone Pilot's accessibility service on, tap **Start Wi-Fi bridge**, and keep `cloudflared` running in Termux.
-3. The cloud environment must allow `*.trycloudflare.com` (with the star) under Allowed domains. A proxy `403` on CONNECT means it doesn't; send the user to the environment settings.
+1. Never save the pairing code or a token to memory or commit them.
+2. On the phone the user must have Phone Pilot's accessibility service on and relay mode started (or, for the bridge, **Start Wi-Fi bridge** and `cloudflared` running in Termux).
+3. The cloud environment must allow the relay's host, `phonepilot-relay.ppilot-2702dc.workers.dev` (or `*.workers.dev`), under Allowed domains; for the bridge, `*.trycloudflare.com`. A proxy `403` on CONNECT, or "Could not reach the relay", means it doesn't; send the user to the environment settings.
 4. Set the pairing once and test it:
 
 ```bash
-export PHONE_PAIRING="bridge:https://ADDRESS.trycloudflare.com#TOKEN"
-C="timeout 70 python3 /home/user/Phone-pilot/phonectl.py"   # the repo checkout; find it with: ls -d /home/user/*/phonectl.py /mnt/project-files/*/phonectl.py
+export PHONE_PAIRING="phonepilot:cf:https://phonepilot-relay.ppilot-2702dc.workers.dev#HEXKEY"   # relay (as the app shows it)
+# or: export PHONE_PAIRING="bridge:https://ADDRESS.trycloudflare.com#TOKEN"                     # Wi-Fi bridge + tunnel
+C="timeout 70 python3 /home/user/Phone-pilot/phonectl.py"   # the repo checkout; find it with: ls -d /home/user/*/phonectl.py /home/user/*/*/phonectl.py
 $C get_screen --timeout 60
 ```
 
-With `PHONE_PAIRING` set, the pairing argument can be left out. Needs Python 3.9+ (`cryptography` only for the old ntfy relay mode).
+With `PHONE_PAIRING` set, the pairing argument can be left out. Needs Python 3.9+ and, for relay mode, `pip install cryptography`.
 
-Error meanings: `401` = wrong/changed token. `502 Bad Gateway` = tunnel up but the bridge is off or busy (wait 5-10 s and retry; if it persists, ask the user to restart the bridge). Response starting `[The phone's screen is off.]` or `[The phone is on the lock screen.]` = ask the user to unlock; you cannot unlock it.
+Error meanings (relay): `503 phone not connected` = relay mode is off, or the phone is offline or asleep; `429 relay busy` = more than 120 commands in a minute, wait 30 s; `504` = the phone didn't answer in time. (Bridge: `401` = wrong/changed token; `502 Bad Gateway` = tunnel up but the bridge is off or busy, wait 5-10 s and retry, then ask the user to restart the bridge.) A response starting `[The phone's screen is off.]` or `[The phone is on the lock screen.]` = ask the user to unlock; you cannot unlock it.
 
 ### Quick start (copy this)
 
 ```bash
-export PHONE_PAIRING="bridge:https://ADDRESS.trycloudflare.com#TOKEN"
+export PHONE_PAIRING="phonepilot:cf:https://phonepilot-relay.ppilot-2702dc.workers.dev#HEXKEY"
 export PHONE_APP="com.example.notes"          # guard: taps refuse when another app is in front
 C="timeout 100 python3 /home/user/Phone-pilot/phonectl.py"
 $C status "Notes: add a note"                 # task line on the phone

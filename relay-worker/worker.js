@@ -9,11 +9,15 @@
 //
 // Free-plan notes: the Durable Object is SQLite-backed (required on the free plan) and only holds in-memory queues;
 // it is busy only while the phone is polling, so it costs about as much as the time relay mode is switched on.
+//
+// One deployment serves every Phone Pilot user (rooms are separate and everything is encrypted), so each room is
+// rate-limited: a busy test or a misbehaving client gets 429 "relay busy" instead of using up the shared daily quota.
 
 const ID = /^pp[0-9a-f]{30}$/;
 const POLL_MS = 20000;
 const PHONE_SEEN_MS = 45000;      // a phone that polled within this long counts as connected
 const MAX_BODY = 8 * 1024 * 1024;
+const LIMITS = { ctl: 120, poll: 240, reply: 240 };   // per room, per minute (a test run is about 60 commands a minute)
 
 export default {
   async fetch(req, env) {
@@ -30,10 +34,23 @@ export class Relay {
     this.pending = new Map();   // c -> resolve(payload) for controllers waiting for an answer
     this.seq = 0;
     this.phoneSeen = 0;
+    this.hits = { ctl: [], poll: [], reply: [] };
+  }
+
+  /** True when this room has made too many requests of this kind in the last minute. */
+  limited(op) {
+    const now = Date.now(), h = this.hits[op].filter((t) => now - t < 60000);
+    h.push(now);
+    this.hits[op] = h.slice(-2 * LIMITS[op]);      // bounded, even under a flood
+    return h.length > LIMITS[op];
   }
 
   async fetch(req) {
     const op = new URL(req.url).pathname.split("/")[1];
+    if (LIMITS[op] && this.limited(op)) {
+      return new Response("relay busy: too many requests from this phone or pairing code, wait a minute", {
+        status: 429, headers: { "content-type": "text/plain", "retry-after": "30" } });
+    }
     if (op === "poll" && req.method === "GET") return this.poll();
     if (op === "reply" && req.method === "POST") return this.reply(req);
     if (op === "ctl" && req.method === "POST") return this.ctl(req);

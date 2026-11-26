@@ -32,6 +32,9 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class RelayClient {
 
+    /** The shared Phone Pilot relay (relay-worker/): works for everyone with no account; each pairing code is its own encrypted room. */
+    public static final String DEFAULT_SERVER = "https://phonepilot-relay.ppilot-2702dc.workers.dev";
+
     private final PilotService svc;
     private volatile boolean running;
     private volatile Thread thread;
@@ -202,10 +205,16 @@ public final class RelayClient {
                 HttpURLConnection c = (HttpURLConnection) new URL(server + "/poll/" + cfId).openConnection();
                 c.setConnectTimeout(20000);
                 c.setReadTimeout(40000);
-                c.setRequestProperty("User-Agent", "PhonePilot/0.11");
+                c.setRequestProperty("User-Agent", "PhonePilot/0.12");
                 stream = c;
                 int code = c.getResponseCode();
                 if (code == 204) { c.disconnect(); backoff = 2000; if (wasDown) { Log.add("Relay connected."); wasDown = false; } continue; }
+                if (code == 429) {     // shared relay's per-phone limit: wait instead of hammering it
+                    c.disconnect();
+                    Log.add("Relay busy (too many requests this minute); waiting 30 s.");
+                    PilotService.sleep(30000);
+                    continue;
+                }
                 if (code != 200) { c.disconnect(); throw new Exception("relay answered " + code); }
                 String text = AgentRunner.readAll(c.getInputStream());
                 c.disconnect();
@@ -235,7 +244,7 @@ public final class RelayClient {
                 h.setDoOutput(true);
                 h.setFixedLengthStreamingMode(data.length);
                 h.setRequestProperty("Content-Type", "application/json");
-                h.setRequestProperty("User-Agent", "PhonePilot/0.11");
+                h.setRequestProperty("User-Agent", "PhonePilot/0.12");
                 OutputStream os = h.getOutputStream();
                 os.write(data);
                 os.close();

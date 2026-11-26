@@ -18,9 +18,18 @@ Claude then works in a loop: look at the screen → decide → tap/type → look
 
 ## Recommendation
 
-**No computer and no API key? Use the Phone Pilot app in relay mode.** Install `PhonePilot.apk`, turn on its accessibility service, tap **Start relay mode**, and paste the pairing code into your Claude chat. Claude then controls the phone from the chat by running `phonectl.py`, which passes encrypted commands and results through a free relay server ([ntfy.sh](https://ntfy.sh), no account needed). You pay nothing beyond your Claude plan.
+**No computer and no API key? Use the Phone Pilot app in relay mode.** Setup takes about two minutes and needs no account:
 
-**Want a fixed address and no tunnel or ntfy limits?** Deploy the small Cloudflare Worker in [`relay-worker/`](relay-worker/README.md) once; the app (0.11+) then connects to it and the pairing code never changes.
+1. Install `PhonePilot.apk` and turn on its accessibility service (the app has a button for it).
+2. Tap **Start relay mode**, then **Share pairing code** and send it to your Claude chat.
+3. If Claude runs in a cloud session (claude.ai/code), allow the relay's address once in the environment's settings,
+   under Allowed domains: `phonepilot-relay.ppilot-2702dc.workers.dev`.
+
+Claude then controls the phone from the chat by running `phonectl.py`. Commands go through the shared Phone Pilot relay
+(a small Cloudflare Worker, [`relay-worker/`](relay-worker/README.md)) and are encrypted end to end with your pairing
+code, so the relay can't read or send anything. The pairing code stays the same until you tap "New pairing code". You
+pay nothing beyond your Claude plan. You can run your own relay instead (see `relay-worker/`) and type its address in
+the app; the older ntfy.sh relay and the Wi-Fi bridge + Termux tunnel still work too.
 
 **Have an API key?** The app can also run Claude on the phone itself ("Run a task here"). The rest of this guide (ADB, Appium, the Wi-Fi bridge) is for when a computer is available.
 

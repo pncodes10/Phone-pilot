@@ -66,14 +66,13 @@ public class MainActivity extends Activity {
         // ---- relay mode (Claude in the Claude app, no API key)
         if (!prefs.contains("pairing")) prefs.edit().putString("pairing", RelayClient.newPairingCode()).apply();
         root.addView(heading("1. Let Claude in the Claude app control this phone"));
-        root.addView(label("No API key needed. Tap Start, copy the pairing code and paste it into your "
-                + "Claude chat. Claude sends commands through the relay server; everything is encrypted "
-                + "with the pairing code."));
-        root.addView(label("Relay server: a Cloudflare relay (your https://NAME.workers.dev address, see relay-worker/) "
-                + "or an ntfy server"));
-        relayServer = field(prefs.getString("relayServer", "https://ntfy.sh"), false);
+        root.addView(label("No account or API key needed. Tap Start relay mode, then Share pairing code and send it "
+                + "to your Claude chat. Commands go through the Phone Pilot relay and are encrypted with the pairing "
+                + "code, so nobody else can read or send them."));
+        root.addView(label("Relay server (leave as it is, or enter your own relay; see relay-worker/ in the project)"));
+        relayServer = field(prefs.getString("relayServer", RelayClient.DEFAULT_SERVER), false);
         root.addView(relayServer);
-        root.addView(label("Relay access token (optional, from your free ntfy.sh account; avoids the shared daily limit)"));
+        root.addView(label("Access token (only for an ntfy server; leave empty for the Phone Pilot relay)"));
         relayToken = field(prefs.getString("relayToken", ""), false);
         relayToken.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         root.addView(relayToken);
@@ -95,6 +94,16 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(copy);
+        Button share = button("Share pairing code");
+        share.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                send.putExtra(Intent.EXTRA_TEXT, "Phone Pilot pairing code (relay mode is on):\n" + pairingText());
+                startActivity(Intent.createChooser(send, "Send the pairing code to Claude"));
+            }
+        });
+        root.addView(share);
         Button newCode = button("New pairing code (disconnects the old one)");
         newCode.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {

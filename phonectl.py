@@ -46,6 +46,7 @@ import sys
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 try:
@@ -151,7 +152,14 @@ def call_cf(pairing: str, name: str, args: dict, timeout: float = 90) -> dict:
         with _opener.open(req, timeout=timeout + 15) as r:
             blob = r.read().decode().strip()
     except urllib.error.HTTPError as e:
-        raise SystemExit(f"Relay answered {e.code}: {e.read().decode(errors='replace')[:200]}")
+        msg = e.read().decode(errors="replace")[:200]
+        hint = {503: " (In Phone Pilot: is relay mode on, and is the phone online and unlocked?)",
+                429: " (Too many commands in the last minute; wait about 30 s.)",
+                403: " (Blocked before reaching the relay: check that this environment allows the relay's address.)"}.get(e.code, "")
+        raise SystemExit(f"Relay answered {e.code}: {msg}{hint}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"Could not reach the relay at {server}: {e.reason}. If this is a Claude cloud session, add the "
+                         f"relay's address ({urllib.parse.urlparse(server).hostname}) to the environment's allowed domains.")
     res = json.loads(decrypt(key, blob))
     if res.get("id") != req_id:
         raise SystemExit("The relay returned the answer to a different command; try again.")
