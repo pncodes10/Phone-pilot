@@ -69,7 +69,8 @@ public class MainActivity extends Activity {
         root.addView(label("No API key needed. Tap Start, copy the pairing code and paste it into your "
                 + "Claude chat. Claude sends commands through the relay server; everything is encrypted "
                 + "with the pairing code."));
-        root.addView(label("Relay server"));
+        root.addView(label("Relay server: a Cloudflare relay (your https://NAME.workers.dev address, see relay-worker/) "
+                + "or an ntfy server"));
         relayServer = field(prefs.getString("relayServer", "https://ntfy.sh"), false);
         root.addView(relayServer);
         root.addView(label("Relay access token (optional, from your free ntfy.sh account; avoids the shared daily limit)"));
@@ -200,7 +201,10 @@ public class MainActivity extends Activity {
 
     private String pairingText() {
         String t = relayToken.getText().toString().trim();
-        return "phonepilot:" + relayServer.getText().toString().trim() + (t.isEmpty() ? "" : "?auth=" + t)
+        String sv = relayServer.getText().toString().trim();
+        if (RelayClient.isCf(sv)) return "phonepilot:" + (sv.startsWith("cf:") ? "" : "cf:") + sv.replaceAll("/+$", "")
+                + "#" + prefs.getString("pairing", "");      // Cloudflare relay: no access token
+        return "phonepilot:" + sv + (t.isEmpty() ? "" : "?auth=" + t)
                 + "#" + prefs.getString("pairing", "");
     }
 

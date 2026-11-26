@@ -20,6 +20,8 @@ Claude then works in a loop: look at the screen → decide → tap/type → look
 
 **No computer and no API key? Use the Phone Pilot app in relay mode.** Install `PhonePilot.apk`, turn on its accessibility service, tap **Start relay mode**, and paste the pairing code into your Claude chat. Claude then controls the phone from the chat by running `phonectl.py`, which passes encrypted commands and results through a free relay server ([ntfy.sh](https://ntfy.sh), no account needed). You pay nothing beyond your Claude plan.
 
+**Want a fixed address and no tunnel or ntfy limits?** Deploy the small Cloudflare Worker in [`relay-worker/`](relay-worker/README.md) once; the app (0.11+) then connects to it and the pairing code never changes.
+
 **Have an API key?** The app can also run Claude on the phone itself ("Run a task here"). The rest of this guide (ADB, Appium, the Wi-Fi bridge) is for when a computer is available.
 
 If you do have a computer:

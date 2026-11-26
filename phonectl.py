@@ -12,7 +12,7 @@ API key: it runs this script once per action.
     python phonectl.py run test.yaml            # replay a test script, no Claude needed
 
 PAIRING is the text the app shows, e.g. "phonepilot:https://ntfy.sh#3fa9..." or
-"bridge:https://ADDRESS#TOKEN". You can also put it in the PHONE_PAIRING environment variable and
+"bridge:https://ADDRESS#TOKEN" or, for the Cloudflare relay (relay-worker/), "phonepilot:cf:https://NAME.workers.dev#HEXKEY". You can also put it in the PHONE_PAIRING environment variable and
 pass "-" or leave it out.
 
 Arguments are JSON, or key=value pairs (values are read as JSON when they parse, else as text).
@@ -45,6 +45,7 @@ import secrets
 import sys
 import re
 import time
+import urllib.error
 import urllib.request
 
 try:
@@ -138,6 +139,25 @@ def call(pairing: str, name: str, args: dict, timeout: float = 90) -> dict:
     raise SystemExit(f"No answer from the phone within {timeout:.0f}s. Is relay mode on and the phone online?")
 
 
+def call_cf(pairing: str, name: str, args: dict, timeout: float = 90) -> dict:
+    """Cloudflare relay mode (relay-worker/): one POST that the Worker holds open until the phone has answered.
+    pairing = "phonepilot:cf:https://NAME.workers.dev#HEXKEY"; the Worker only ever sees encrypted text."""
+    server, key, _ = parse_pairing(pairing.strip().replace("phonepilot:cf:", "phonepilot:", 1))
+    req_id = secrets.token_hex(6)
+    body = encrypt(key, json.dumps({"id": req_id, "t": int(time.time()), "name": name, "input": args}).encode())
+    req = urllib.request.Request(f"{server}/ctl/{topic_id(key)}?wait={int(timeout)}", data=body.encode(), method="POST",
+                                 headers={"Content-Type": "text/plain", "User-Agent": "phonectl/1"})
+    try:
+        with _opener.open(req, timeout=timeout + 15) as r:
+            blob = r.read().decode().strip()
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"Relay answered {e.code}: {e.read().decode(errors='replace')[:200]}")
+    res = json.loads(decrypt(key, blob))
+    if res.get("id") != req_id:
+        raise SystemExit("The relay returned the answer to a different command; try again.")
+    return res
+
+
 def call_bridge(target: str, name: str, args: dict, timeout: float = 90) -> dict:
     """Direct mode: talk to the app's Wi-Fi bridge, e.g. through a Cloudflare tunnel.
     target = "bridge:https://xyz.trycloudflare.com#BRIDGE_TOKEN"."""
@@ -153,7 +173,8 @@ def call_bridge(target: str, name: str, args: dict, timeout: float = 90) -> dict
 
 def send(pairing: str, name: str, args: dict, timeout: float = 90) -> dict:
     """One tool call over whichever transport the pairing text names."""
-    fn = call_bridge if pairing.strip().startswith("bridge:") else call
+    p = pairing.strip()
+    fn = call_bridge if p.startswith("bridge:") else call_cf if p.startswith("phonepilot:cf:") else call
     return fn(pairing, name, args, timeout)
 
 

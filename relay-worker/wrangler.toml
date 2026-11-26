@@ -1,0 +1,12 @@
+name = "phonepilot-relay"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+# SQLite-backed Durable Objects are the only kind the free plan allows
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
