@@ -7,7 +7,7 @@ description: "Drive pranesh's Android phone through the Phone Pilot app (shared 
 
 Phone Pilot is an Accessibility Service app on the user's Android phone (Samsung S23 FE, 1080x2340). In **relay mode** (0.12+, the default) it polls the shared Phone Pilot relay, a Cloudflare Worker at `https://phonepilot-relay.ppilot-2702dc.workers.dev`; every command is end-to-end encrypted with the pairing code. (The older way, the Wi-Fi bridge on port 8765 exposed by a Cloudflare quick tunnel in Termux, still works.) You control the phone with `phonectl.py`, one command per call, about 0.6-2 s each.
 
-Source: https://github.com/pncodes10/Phone-pilot (usually checked out at /home/user/Phone-pilot; if not, `ls -d /home/user/*/phonectl.py`). The prebuilt `PhonePilot.apk` is in the repo root. This skill is written for **Phone Pilot 0.12+** (relay mode with the shared relay; 0.10+ for the bridge); with an older app the new tools answer "Unknown tool": ask the user to install the current `PhonePilot.apk`.
+Source: https://github.com/pncodes10/Phone-pilot (usually checked out at /home/user/Phone-pilot; if not, `ls -d /home/user/*/phonectl.py`). The newest app is always at https://github.com/pncodes10/Phone-pilot/releases/latest/download/PhonePilot.apk (built and signed by the repo's "Build APK" workflow; 0.13+ install over each other). This skill is written for **Phone Pilot 0.12+** (relay mode with the shared relay; 0.10+ for the bridge); with an older app the new tools answer "Unknown tool": ask the user to install the current app from that link.
 
 ## 0. Tell the user the process first
 

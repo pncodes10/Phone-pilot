@@ -20,7 +20,8 @@ Claude then works in a loop: look at the screen → decide → tap/type → look
 
 **No computer and no API key? Use the Phone Pilot app in relay mode.** Setup takes about two minutes and needs no account:
 
-1. Install `PhonePilot.apk` and turn on its accessibility service (the app has a button for it).
+1. Install the app from [github.com/pncodes10/Phone-pilot releases](https://github.com/pncodes10/Phone-pilot/releases/latest/download/PhonePilot.apk) (direct link to the newest
+   `PhonePilot.apk`) and turn on its accessibility service (the app has a button for it).
 2. Tap **Start relay mode**, then **Share pairing code** and send it to your Claude chat.
 3. If Claude runs in a cloud session (claude.ai/code), allow the relay's address once in the environment's settings,
    under Allowed domains: `phonepilot-relay.ppilot-2702dc.workers.dev`.
@@ -157,7 +158,7 @@ It works in three ways:
 Tools Claude gets: `get_screen` (short numbered list of the useful items), `screenshot`, `tap_id`, `tap_text`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_button` (back/home/recents/notifications…), `list_apps`, `launch_app` (by name or package), `open_url`, `wait_for`, `wait_gone`, `wait`. From 0.7 every action returns the new screen; see "Phone Pilot 0.7" below.
 
 ### Install
-1. Copy `PhonePilot.apk` to the phone and open it (allow "install unknown apps" for your file manager/browser when asked).
+1. Download `PhonePilot.apk` on the phone from https://github.com/pncodes10/Phone-pilot/releases/latest/download/PhonePilot.apk and open it (allow "install unknown apps" for your file manager/browser when asked).
 2. **Android 13+ only:** sideloaded apps can't get accessibility access until you allow it. Settings → Apps → Phone Pilot → ⋮ (top right) → **Allow restricted settings**. (The ⋮ menu appears after you've tried to turn on the service once.)
 3. Open Phone Pilot → **Open Accessibility settings** → Installed apps / Downloaded apps → **Phone Pilot** → turn on.
 4. Get an API key at console.anthropic.com and paste it into the app (for mode 1 only). Default model is `claude-opus-5-5`; you can type another model id in the Model field (e.g. `claude-sonnet-5-5` or `claude-haiku-5-5` for cheaper runs).
@@ -187,7 +188,7 @@ The APK compiles and packages correctly. The agent loop was tested against a moc
 
 ### Phone Pilot 0.7: numbered items, waits and test scripts
 
-Needs the 0.7 app on the phone: `PhonePilot.apk` in this folder is 0.7. With an older app, `phonectl.py` still works but the new tools below answer "Unknown tool".
+Needs the 0.7 app or newer on the phone (get the newest from the Releases page). With an older app, `phonectl.py` still works but the new tools below answer "Unknown tool".
 
 **Updating to 0.7:** this build is signed with a new debug key (certificate SHA-256 `699d419c…658b55`), so Android won't install it over 0.6. Uninstall the old Phone Pilot first, install 0.7, then turn its accessibility service on again (and "Allow restricted settings" again on Android 13+). Later builds signed with the same keystore install as normal updates.
 

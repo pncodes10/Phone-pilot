@@ -1,7 +1,9 @@
 name: Build APK
 
 # Builds PhonePilot.apk with Gradle on GitHub's Ubuntu runner (Android SDK included) and signs it.
-# Download it from the run's "Artifacts" section.
+# Download it from the run's "Artifacts" section. Started by hand on main (Actions > Build APK > Run workflow), it also
+# publishes the GitHub release vX.Y (versionName in android-app/app/build.gradle), so the permanent link
+# https://github.com/pncodes10/Phone-pilot/releases/latest/download/PhonePilot.apk always gives the newest app.
 #
 # Android only installs a new APK over an installed one when both are signed with the same key. Add these repository
 # secrets (Settings > Secrets and variables > Actions) so every build uses the same key and installs as an update:
@@ -16,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write     # only used by the release step, which runs only on main when started by hand
 
 jobs:
   build:
@@ -64,3 +66,17 @@ jobs:
           path: PhonePilot.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish the release (main, started by hand)
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VN=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" android-app/app/build.gradle)
+          if gh release view "v$VN" > /dev/null 2>&1; then
+            gh release upload "v$VN" PhonePilot.apk --clobber
+          else
+            gh release create "v$VN" PhonePilot.apk --target "$GITHUB_SHA" --title "Phone Pilot $VN" \
+              --notes "Install PhonePilot.apk on the phone (Android 11+). Updates install over earlier versions signed with the same key (0.13 and later)."
+          fi
+          echo "https://github.com/pncodes10/Phone-pilot/releases/latest/download/PhonePilot.apk"
