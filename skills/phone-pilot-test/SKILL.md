@@ -80,7 +80,7 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 | `tap_text "Save"` / `tap_text text=Save exact=true` / `tap_text res_id=save_btn` | Tap the best visible match: exact text first, then clickable. Matches text, description and hint, **in every window, including other apps and the nav bar** (e.g. `"Back"` exact matches the system Back key). |
 | `type_text text="Box A" id=6` | Type into item 6 (replaces its text; `append=true` keeps it, `submit=true` presses Enter). Without `id`, types into the focused field. |
 | `wait_for text="Saved" timeout=5` | Poll every 300 ms until the text is on screen; an error on timeout. Reports how long it took. |
-| `wait_for text="Run" exact=true enabled=true timeout=60` | Wait **on the phone** for a button to come back after the app's work (no polling over the tunnel). `enabled=false` waits for it to grey out. |
+| `wait_for text="Run" exact=true enabled=true timeout=60` | Wait **on the phone** for a button to come back after the app's work (no polling over the connection). `enabled=false` waits for it to grey out. |
 | `wait_gone text="Loading" timeout=10` | Same as `wait_for`, until the text disappears. |
 | `scroll_to text="Result log"` | Swipe until the item is on screen (`direction=up`, `max=10`), stopping at the end of the list. One call instead of scroll-and-look loops. |
 | `get_text 4` / `get_text text="Compress 2026"` | **Full, uncut** text of one item (up to 200,000 chars). The first line of the output is a `<n> characters:` header: save with `$C get_text ... \| tail -n +2 > log.txt`. Only finds items currently on screen: scroll to them first. |
@@ -96,13 +96,13 @@ Arguments are `key=value` pairs or JSON; a bare value fills the main parameter.
 | `open_url`, `wait seconds=1` | Misc. Prefer `wait_for` over fixed `wait`. |
 | `batch '[["tap_id",{"id":5}],["type_text",{"text":"hi"}]]'` | Several steps in one round trip, stops at the first error |
 
-**The phone shows what you are doing.** Every command updates a small strip at the top left of the phone ("Claude: Tapping \"Save\"…", then ✓ or ✗) with a Stop button. Your taps pass through it, it hides itself on system screens (file picker, permission and install dialogs) and after 60 s without commands, and `get_screen` never lists it. Stop ends the bridge: if commands suddenly fail to connect, the user may have pressed it.
+**The phone shows what you are doing.** Every command updates a small strip at the top left of the phone ("Claude: Tapping \"Save\"…", then ✓ or ✗) with a Stop button. Your taps pass through it, it hides itself on system screens (file picker, permission and install dialogs) and after 60 s without commands, and `get_screen` never lists it. Stop ends relay mode (and the bridge): if commands suddenly answer `503 phone not connected`, the user may have pressed it; ask them to tap **Start relay mode** again (the pairing code stays the same).
 
 **Every action returns the new screen** after it settles, as `ok: <message>` (or `error: ...`), a blank line, `screen:`, then the screen list. So you rarely need a separate `get_screen`. Add `observe=false` to get only the first line (faster when you don't need the screen, e.g. inside loops).
 
 ### Go fast
 
-Each `phonectl` call costs about 0.6-1 s of tunnel time, plus the time the screen takes to settle. Most of a run is spent on calls you didn't need:
+Each `phonectl` call costs about 0.6-1 s of connection time (relay or tunnel), plus the time the screen takes to settle. Most of a run is spent on calls you didn't need:
 - **Chain several commands in one Bash call**, with a check between them, instead of one tool call per command. Stop the chain when a result says `error:` or `app=` is wrong (see the scenarios).
 - **Read the returned screen.** Every action already returns it; don't follow an action with `get_screen`.
 - **Tap by text** (`tap_text Save`) when you know the label: no need to read the screen first. Use `tap_id` for items without a unique label.
@@ -150,7 +150,7 @@ When asked to time steps:
   `t(){ l=$1; shift; s=$(date +%s%3N); $C "$@" > /tmp/last.txt; echo "$l: $(( $(date +%s%3N)-s )) ms"; cat /tmp/last.txt; }`
 - Use `observe=false` / `labels=false` for steps whose screen you don't need, so you time the app, not screenshots.
 - For long work in the app (a button greys out while it runs), tap it with `observe=false`, then time one `wait_for text=<button> exact=true enabled=true timeout=60 observe=false` call: it returns as soon as the button is back. Also quote the app's own reported duration if its log has one.
-- Report a table: step, time, result. Say which part is the app and which is the tunnel and settle overhead (each Phone Pilot call costs about 0.6-1 s through the tunnel).
+- Report a table: step, time, result. Say which part is the app and which is the connection and settle overhead (each Phone Pilot call costs about 0.6-1 s through the relay).
 - For reference: a three-screen flow with checks took 6.3 s and 5 calls the new way (actions return the screen, `wait_for`), against 14.5 s and 10 calls with fixed waits and a full `get_screen` after each action.
 
 ## 6. Worked scenarios
@@ -160,7 +160,7 @@ When asked to time steps:
 The user: "I installed the new Notes build. Check that adding a note works, and keep a test I can rerun."
 
 ```bash
-export PHONE_PAIRING="bridge:https://ADDRESS.trycloudflare.com#TOKEN" PHONE_APP=com.example.notes
+export PHONE_PAIRING="phonepilot:cf:https://phonepilot-relay.ppilot-2702dc.workers.dev#HEXKEY" PHONE_APP=com.example.notes
 C="timeout 100 python3 /home/user/Phone-pilot/phonectl.py"
 
 # 1. Explore once, reading each returned screen (one Bash call, stops at the first error).
@@ -234,11 +234,14 @@ Report: a table of step times (say which part was the app's own work: the job's 
 - **Samsung DeX or a second screen.** If the phone shows a black touchpad (items with ids like `touchpad_close_image_button`) or `app=` is empty after launching, the app opened on the other display. Don't tap the touchpad's close button: `ask_user` the person to end DeX and open the app on the phone. Right after switching, a screen read can come back empty once; read it again.
 - **Leftover keyboard.** A field focused in an earlier run keeps the keyboard open, which hides buttons near the bottom (the header shows `Keyboard open from y=...`). `press_button back` hides it. `press_button back` on an app's root screen exits the app.
 - **The relaunch resets the app.** `launch_app` can bring an app back on its main screen, losing in-app state such as a log on screen. Read logs with `get_text` before switching away.
-- **System file picker (`com.google.android.documentsui`).** It ignores automated taps and accessibility clicks on files (seen on Android 11-15 by other automation tools too; Edge panels off didn't help). Opening it from the app (e.g. tapping **Pick pictures**) is fine; it is taps on files *inside* the picker that are ignored, and they can stall for about 15 s and cause a 502. Its search and toolbar work. Ask for it with `ask_user "Please pick <file> in the picker, then tap Done" wait=80`. If the task needs a particular kind of file, name it in the message (e.g. "a plain photo, not a Motion Photo", or the file name the user gave you) (the notification's Done works there; the card is hidden on that screen), then check the app's screen and continue.
+- **System file picker (`com.google.android.documentsui`).** It ignores automated taps and accessibility clicks on files (seen on Android 11-15 by other automation tools too; Edge panels off didn't help). Opening it from the app (e.g. tapping **Pick pictures**) is fine; it is taps on files *inside* the picker that are ignored, and they can stall for about 15 s and cause a timeout (a `504` on the relay, a `502` on the bridge). Its search and toolbar work. Ask for it with `ask_user "Please pick <file> in the picker, then tap Done" wait=80`. If the task needs a particular kind of file, name it in the message (e.g. "a plain photo, not a Motion Photo", or the file name the user gave you) (the notification's Done works there; the card is hidden on that screen), then check the app's screen and continue.
 - `type_text` with `submit=true` (IME Enter) can hang about 30 s in some fields (seen in the file picker search). Type without submit, then tap the result or the app's button.
 - **Needing the user.** Whenever you are blocked on something only the person can do (lock screen, sign-in, a picker, a permission prompt, a physical check), use `ask_user` with one short, specific instruction instead of only writing in chat: they may not be looking at the chat. Keep waiting with `ask_user wait=...` calls; after about 5 minutes without Done, stop and report.
 - Never type passwords, PINs, or sign in to accounts for the user; never send messages or make purchases.
 - Agents can't install an APK: Android always asks the user to tap Install. Give them the APK and ask them to install it.
+- **Relay connection drops ("phone not connected" while the app says Listening).** Check the room's status page, which shows only times: `https://phonepilot-relay.ppilot-2702dc.workers.dev/status/<id>`, where `<id>` is `python3 -c "import sys,hashlib;print('pp'+hashlib.sha256(b'phonepilot-topic'+bytes.fromhex(sys.argv[1])).hexdigest()[:30])" HEXKEY`. `"polls": 0` means the phone isn't reaching the relay: ask the user for the last lines of Phone Pilot's log. `Software caused connection abort` there means Android cut the app's network in the background: Phone Pilot must be exempt from battery optimisation (0.13+ asks when relay mode starts; otherwise App info > Battery > Unrestricted) and allowed background data (App info > Mobile data). A phone that polled within 45 s counts as connected; after an outage the app reconnects within 10 s.
+- **A new pairing code after reinstalling Phone Pilot.** Uninstalling clears it (and turns the accessibility service off), so ask for the new code. Updates from the release link (0.13+, same signing key) keep the code and settings.
+- **Updating Phone Pilot itself.** The newest signed app is always at https://github.com/pncodes10/Phone-pilot/releases/latest/download/PhonePilot.apk; a new version is released by bumping `versionName` in `android-app/app/build.gradle` on main and running the "Build APK" workflow there by hand.
 - Phone Pilot keeps the screen on for 3 minutes after each command (removed automatically in the file picker). It can't stop the power button.
 
 ## 8. Report
