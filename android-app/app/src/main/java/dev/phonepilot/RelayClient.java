@@ -32,15 +32,22 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class RelayClient {
 
+    /** The shared Phone Pilot relay (relay-worker/): works for everyone with no account; each pairing code is its own encrypted room. */
+    public static final String DEFAULT_SERVER = "https://phonepilot-relay.ppilot-2702dc.workers.dev";
+
     private final PilotService svc;
     private volatile boolean running;
     private volatile Thread thread;
     private volatile HttpURLConnection stream;
+    private android.os.PowerManager.WakeLock cpu;
 
     private String server;
     private String token = ""; // optional ntfy access token (tk_...), so limits count per account, not per IP
     private byte[] key;
     private String cmdTopic, resTopic;
+    /** True for the Cloudflare relay (relay-worker/): server is written "cf:https://NAME.workers.dev" or is a *.workers.dev address. */
+    private boolean cf;
+    private String cfId;
 
     RelayClient(PilotService svc) { this.svc = svc; }
 
@@ -60,6 +67,12 @@ public final class RelayClient {
         return "pp" + hex(h).substring(0, 30);
     }
 
+    /** The Cloudflare relay: a server written "cf:https://..." or any *.workers.dev address. Anything else is an ntfy server. */
+    static boolean isCf(String server) {
+        String sv = server.trim();
+        return sv.startsWith("cf:") || sv.replaceFirst("^https?://", "").replaceAll("[/:?#].*$", "").endsWith(".workers.dev");
+    }
+
     // ------------------------------------------------------------------ lifecycle
 
     public synchronized void start(String serverUrl, String pairingCode) throws Exception {
@@ -68,15 +81,31 @@ public final class RelayClient {
 
     public synchronized void start(String serverUrl, String pairingCode, String accessToken) throws Exception {
         if (running) return;
-        server = serverUrl.replaceAll("/+$", "");
+        String sv = serverUrl.trim();
+        cf = isCf(sv);
+        if (sv.startsWith("cf:")) sv = sv.substring(3);
+        server = sv.replaceAll("/+$", "");
         token = accessToken == null ? "" : accessToken.trim();
         key = unhex(pairingCode.trim());
         if (key.length != 32) throw new IllegalArgumentException("pairing code must be 64 hex characters");
         String id = topicId(key);
         cmdTopic = id + "-cmd";
         resTopic = id + "-res";
+        cfId = id;
         running = true;
-        thread = new Thread(new Runnable() { @Override public void run() { loop(); } }, "relay");
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) svc.getSystemService(android.content.Context.POWER_SERVICE);
+            cpu = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "phonepilot:relay");
+            cpu.setReferenceCounted(false);
+            cpu.acquire(4 * 60 * 60 * 1000L);       // released by stop(); at most 4 hours
+            if (!pm.isIgnoringBatteryOptimizations(svc.getPackageName()))
+                Log.add("Tip: battery optimisation is on for Phone Pilot; Android may cut the relay connection in the background. "
+                        + "Allow it in the dialog, or set Battery to Unrestricted in App info.");
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) svc.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+            if (cm.getRestrictBackgroundStatus() == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED)
+                Log.add("Tip: Data Saver is blocking Phone Pilot's background data. In App info > Mobile data, allow data while Data Saver is on.");
+        } catch (Exception e) { Log.add("Could not keep the phone awake for the relay: " + e.getMessage()); }
+        thread = new Thread(new Runnable() { @Override public void run() { if (cf) loopCf(); else loop(); } }, "relay");
         thread.start();
         Log.add("Relay mode on. Waiting for Claude's commands via " + server);
     }
@@ -84,6 +113,7 @@ public final class RelayClient {
     public synchronized void stop() {
         if (!running) return;
         running = false;
+        try { if (cpu != null && cpu.isHeld()) cpu.release(); } catch (Exception ignored) { }
         HttpURLConnection c = stream;
         if (c != null) c.disconnect();
         Thread t = thread;
@@ -127,44 +157,123 @@ public final class RelayClient {
     }
 
     private void handle(JSONObject ev) {
+        try {
+            String answer = run(body(ev));
+            if (answer != null) publish(resTopic, answer);
+        } catch (Exception e) {
+            Log.add("Relay reply failed: " + e.getMessage());
+        }
+    }
+
+    /** Runs one encrypted command and returns the encrypted answer; null when the message is not for this phone or has expired. */
+    private String run(String payload) {
         String reqId = "?";
         try {
-            String payload = body(ev);
             JSONObject cmd;
             try {
                 cmd = new JSONObject(new String(decrypt(payload), StandardCharsets.UTF_8));
             } catch (Exception bad) {
                 Log.add("Ignored a relay message that wasn't encrypted with this pairing code.");
-                return;
+                return null;
             }
             reqId = cmd.optString("id", "?");
             long sentAt = cmd.optLong("t", 0);
             if (sentAt > 0 && Math.abs(System.currentTimeMillis() / 1000 - sentAt) > 300) {
                 Log.add("Ignored an expired command.");
-                return;
+                return null;
             }
             String name = cmd.getString("name");
             JSONObject input = cmd.optJSONObject("input");
             if (input == null) input = new JSONObject();
             if (svc.agent.isRunning()) {
-                reply(reqId, null, "The on-phone agent is running; stop it first.", true);
-                return;
+                return answer(reqId, null, "The on-phone agent is running; stop it first.", true);
             }
             Log.add("Claude (relay): " + name + " " + input);
             DeviceTools.Result res = svc.tools.run(name, input);
-            reply(reqId, res, null, res.isError);
+            return answer(reqId, res, null, res.isError);
         } catch (Exception e) {
-            try { reply(reqId, null, "Phone error: " + e, true); } catch (Exception ignored) { }
+            try { return answer(reqId, null, "Phone error: " + e, true); } catch (Exception ignored) { return null; }
         }
     }
 
-    private void reply(String reqId, DeviceTools.Result res, String errText, boolean isError) throws Exception {
+    private String answer(String reqId, DeviceTools.Result res, String errText, boolean isError) throws Exception {
         JSONObject out = new JSONObject();
         out.put("id", reqId);
         out.put("is_error", isError);
         if (res != null) out.put("content", res.toContent());
         else out.put("content", new DeviceTools.Result(errText, null, true).toContent());
-        publish(resTopic, encrypt(out.toString().getBytes(StandardCharsets.UTF_8)));
+        return encrypt(out.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    // ------------------------------------------------------------------ Cloudflare relay (long-poll)
+
+    /**
+     * Asks the Worker for the next command (it answers within about 20 s, 204 = nothing yet), runs it, and posts the
+     * encrypted answer. Plain HTTPS requests only, so it survives Wi-Fi/mobile changes: a failed request is just retried.
+     */
+    private void loopCf() {
+        int backoff = 2000;
+        boolean wasDown = false;
+        while (running) {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(server + "/poll/" + cfId).openConnection();
+                c.setConnectTimeout(20000);
+                c.setReadTimeout(40000);
+                c.setRequestProperty("User-Agent", "PhonePilot/0.13");
+                stream = c;
+                int code = c.getResponseCode();
+                if (code == 204) { c.disconnect(); backoff = 2000; if (wasDown) { Log.add("Relay connected."); wasDown = false; } continue; }
+                if (code == 429) {     // shared relay's per-phone limit: wait instead of hammering it
+                    c.disconnect();
+                    Log.add("Relay busy (too many requests this minute); waiting 30 s.");
+                    PilotService.sleep(30000);
+                    continue;
+                }
+                if (code != 200) { c.disconnect(); throw new Exception("relay answered " + code); }
+                String text = AgentRunner.readAll(c.getInputStream());
+                c.disconnect();
+                backoff = 2000; wasDown = false;
+                JSONObject m = new JSONObject(text);
+                String answer = run(m.getString("p"));
+                if (answer == null) continue;
+                postReply(m.getInt("c"), answer);
+            } catch (Exception e) {
+                if (!running) break;
+                String why = String.valueOf(e.getMessage());
+                if (!wasDown) Log.add("Relay connection problem, retrying: " + why
+                        + (why.contains("abort") || why.contains("reset") ? " (Android cut the connection: set Phone Pilot's Battery to Unrestricted"
+                           + " and allow background data, or keep the phone unlocked)" : ""));
+                wasDown = true;
+                PilotService.sleep(backoff);
+                backoff = Math.min(backoff * 2, 10000);
+            }
+        }
+    }
+
+    private void postReply(int c, String answer) throws Exception {
+        byte[] data = new JSONObject().put("c", c).put("p", answer).toString().getBytes(StandardCharsets.UTF_8);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                HttpURLConnection h = (HttpURLConnection) new URL(server + "/reply/" + cfId).openConnection();
+                h.setRequestMethod("POST");
+                h.setConnectTimeout(20000);
+                h.setReadTimeout(60000);
+                h.setDoOutput(true);
+                h.setFixedLengthStreamingMode(data.length);
+                h.setRequestProperty("Content-Type", "application/json");
+                h.setRequestProperty("User-Agent", "PhonePilot/0.13");
+                OutputStream os = h.getOutputStream();
+                os.write(data);
+                os.close();
+                int code = h.getResponseCode();
+                h.disconnect();
+                if (code == 200) return;
+                throw new Exception("relay reply failed: " + code);
+            } catch (Exception e) {
+                if (attempt == 2 || !running) throw e;
+                PilotService.sleep(1000);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ relay HTTP
